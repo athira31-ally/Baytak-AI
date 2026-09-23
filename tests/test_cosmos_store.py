@@ -13,6 +13,11 @@ class FakeContainer:
     def upsert_item(self, item):
         self.items[item["id"]] = item
 
+    def execute_item_batch(self, ops, partition_key):
+        assert len(ops) <= 100 and all(op[1][0]["ym"] == partition_key for op in ops)
+        for _, (item,) in ops:
+            self.items[item["id"]] = item
+
     def read_item(self, item, partition_key):
         if item not in self.items:
             raise CosmosResourceNotFoundError(message="nope")
@@ -47,7 +52,7 @@ def test_upsert_counts_new_sets_ttl_and_skips_expired():
     assert r == {"new": 2, "updated": 0} and set(s.tx.items) == {"T1", "T2"}
     ttl = s.tx.items["T1"]["ttl"]
     assert 390 * 86400 < ttl <= 400 * 86400                             # expires 400 days after the deal
-    assert s.upsert_transactions([doc(1, 5), doc(4, 1)]) == {"new": 1, "updated": 1}
+    assert s.upsert_transactions([doc(1, 5), doc(4, 1)]) == {"new": 1, "updated": 1}   # T1 skipped, not rewritten
     assert s.stats()["transactions"] == 3 and len(s.load_transactions((date.today() - timedelta(days=7)).isoformat())) == 2
 
 
@@ -59,3 +64,10 @@ def test_large_memory_values_are_split_across_items():
     assert s.mem.items["homes_snapshot"]["parts"] > 1
     assert s.get_memory("homes_snapshot") == big
     assert s.get_memory("missing", "d") == "d"
+
+
+def test_bulk_seed_is_batched_and_resumable():
+    s = store()
+    docs = [doc(i, i % 300) for i in range(1050)]
+    assert s.upsert_transactions(docs)["new"] == 1050
+    assert s.upsert_transactions(docs) == {"new": 0, "updated": 1050}    # re-run after a crash: nothing rewritten

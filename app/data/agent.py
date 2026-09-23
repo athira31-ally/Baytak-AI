@@ -54,7 +54,8 @@ Each day you append the new Dubai Land Department deals to the database and refr
 6. If something is worth knowing next time (e.g. an unusual volume, a failed check, an area
    with many unmatched deals), call remember with one short sentence.
 7. Call market_brief, then finish with a report for the engineer:
-   first line APPENDED / NOT APPENDED / NO NEW DATA and the newest deal date; then how many new
+   first line APPENDED / NOT APPENDED / NO NEW DATA and the newest deal date. Use NO NEW DATA only when
+   the fetch succeeded with 0 rows or append_deals reported 0 new deals; any error means NOT APPENDED; then how many new
    deals and MB downloaded; then 3-5 bullets using only numbers from the tools. Never invent numbers."""
 
 
@@ -336,6 +337,9 @@ class MarketDataAgent:
             self._call("remember", {"note": f"Batch rejected: {failed}"[:300]})
             return f"NOT APPENDED - failed checks: {failed}"
         app = self._call("append_deals", {})
+        if app.get("error") or not app.get("appended"):
+            return (f"NOT APPENDED - writing to the database failed: {app.get('error') or app.get('reason')}. "
+                    "Safe to re-run: deals already written are skipped.")
         if not app.get("new"):
             return f"NO NEW DATA - {got['rows']:,} recent deals re-read, all already stored (newest {app.get('watermark')})"
         reb = self._call("rebuild_homes", {})

@@ -67,14 +67,14 @@ echo ">> Scheduled job $JOB (cron '$CRON' UTC)"
 if exists az containerapp job show -n "$JOB" -g "$RG"; then
   az containerapp job secret set -n "$JOB" -g "$RG" --secrets "${SECRETS[@]}" -o none
   az containerapp job update -n "$JOB" -g "$RG" --image "$IMAGE" --cron-expression "$CRON" \
-    --set-env-vars "${ENVV[@]}" -o none
+    --set-env-vars "${ENVV[@]}" PYTHONPATH=/app -o none
 else
   az containerapp job create -n "$JOB" -g "$RG" --environment "$ENV_ID" \
     --trigger-type Schedule --cron-expression "$CRON" \
     --image "$IMAGE" --cpu 1.0 --memory 2.0Gi \
     --replica-timeout 3600 --replica-retry-limit 1 --parallelism 1 --replica-completion-count 1 \
-    --command "python" --args "-m" "scripts.data_agent" \
-    --secrets "${SECRETS[@]}" --env-vars "${ENVV[@]}" -o none
+    --command "python" --args "/app/scripts/data_agent.py" \
+    --secrets "${SECRETS[@]}" --env-vars "${ENVV[@]}" PYTHONPATH=/app -o none
 fi
 
 echo ""

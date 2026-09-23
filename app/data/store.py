@@ -18,6 +18,7 @@ import gzip
 import hashlib
 import io
 import json
+import logging
 import re
 import sqlite3
 import threading
@@ -30,6 +31,7 @@ import pandas as pd
 from app.config import Settings
 from app.data.dld import pick, to_dt
 
+log = logging.getLogger(__name__)
 TTL_SECONDS = 400 * 24 * 3600
 HOMES_KEY = "baytak:homes"
 
@@ -124,38 +126,67 @@ class CosmosMarketStore:
         from azure.cosmos import CosmosClient, PartitionKey
         from azure.identity import DefaultAzureCredential
 
-        client = CosmosClient(settings.cosmos_endpoint, credential=settings.cosmos_key or DefaultAzureCredential())
+        client = CosmosClient(settings.cosmos_endpoint, credential=settings.cosmos_key or DefaultAzureCredential(),
+                              connection_timeout=120)
         db = client.create_database_if_not_exists(settings.cosmos_database)
         # default_ttl=-1 turns TTL on without a default; each item sets its own `ttl`
         self.tx = db.create_container_if_not_exists(id="market_tx", partition_key=PartitionKey(path="/ym"),
                                                     default_ttl=-1)
         self.mem = db.create_container_if_not_exists(id="agent_memory", partition_key=PartitionKey(path="/key"))
 
+    BATCH = 100             # Cosmos transactional batch limit (same partition key)
+    WORKERS = 4
+
+    def _write_batch(self, ym: str, items: list[dict]) -> None:
+        """One round trip per 100 deals. Retries throttling/timeouts with backoff."""
+        ops = [("upsert", (it,)) for it in items]
+        for attempt in range(6):
+            try:
+                self.tx.execute_item_batch(ops, partition_key=ym)
+                return
+            except Exception as e:                   # 429 / 408 / network hiccup
+                if attempt == 5:
+                    raise
+                wait = min(30, 2 ** attempt)
+                log.warning("Cosmos batch (%s, %d items) failed: %s - retrying in %ss", ym, len(items),
+                            type(e).__name__, wait)
+                time.sleep(wait)
+
     def upsert_transactions(self, docs: list[dict]) -> dict:
-        new = updated = 0
+        """Write only deals we don't have yet (deals are immutable), in batches of 100.
+        Resumable: if a run dies half-way, the next run skips everything already written."""
         by_month: dict[str, list[dict]] = {}
         for d in docs:
             by_month.setdefault(d["ym"], []).append(d)
+        now, jobs, skipped, expired = time.time(), [], 0, 0
         for ym, group in by_month.items():
             ids = [d["id"] for d in group]
             existing = set()
-            for i in range(0, len(ids), 200):
+            for i in range(0, len(ids), 500):
                 q = "SELECT VALUE c.id FROM c WHERE ARRAY_CONTAINS(@ids, c.id)"
-                existing |= set(self.tx.query_items(q, parameters=[{"name": "@ids", "value": ids[i:i + 200]}],
+                existing |= set(self.tx.query_items(q, parameters=[{"name": "@ids", "value": ids[i:i + 500]}],
                                                     partition_key=ym))
-            now = time.time()
-            items = []
+            todo = []
             for d in group:
+                if d["id"] in existing:
+                    skipped += 1
+                    continue
                 expires = pd.Timestamp(d["date"]).timestamp() + TTL_SECONDS
-                if expires > now:               # skip deals already outside the rolling window
-                    items.append({**d, "ttl": int(expires - now)})
-            # parallel upserts: the first 12-month seed is ~200k deals; the SDK retries 429s
-            with ThreadPoolExecutor(max_workers=16) as pool:
-                list(pool.map(self.tx.upsert_item, items))
-            kept = {i["id"] for i in items}
-            new += len(kept - existing)
-            updated += len(kept & existing)
-        return {"new": new, "updated": updated}
+                if expires <= now:              # already outside the rolling window
+                    expired += 1
+                    continue
+                todo.append({**d, "ttl": int(expires - now)})
+            jobs += [(ym, todo[i:i + self.BATCH]) for i in range(0, len(todo), self.BATCH)]
+        total, done = sum(len(j[1]) for j in jobs), 0
+        if total:
+            log.info("Writing %d new deals to Cosmos in %d batches (%d already stored)", total, len(jobs), skipped)
+        with ThreadPoolExecutor(max_workers=self.WORKERS) as pool:
+            for (ym, items), fut in zip(jobs, [pool.submit(self._write_batch, ym, items) for ym, items in jobs]):
+                fut.result()
+                done += len(items)
+                if done % 20_000 < self.BATCH:
+                    log.info("  %d / %d deals written", done, total)
+        return {"new": total, "updated": skipped}
 
     def load_transactions(self, since: str) -> pd.DataFrame:
         q = "SELECT VALUE c.row FROM c WHERE c.date >= @since"
