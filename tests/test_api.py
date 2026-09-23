@@ -37,3 +37,21 @@ def test_page_is_diverse(client):
     r = client.post("/recommend", json={"purpose": "sale", "budget_aed": 2_000_000, "min_bedrooms": 2}).json()
     counts = Counter(x["listing"]["community"] for x in r["recommendations"] if x["source"] != "explore")
     assert max(counts.values()) <= 3
+
+
+def test_listing_details_for_view_panel(client):
+    r = client.post("/recommend", json={"purpose": "sale", "budget_aed": 2_500_000}).json()
+    lid = r["recommendations"][0]["listing"]["listing_id"]
+    d = client.get(f"/listings/{lid}/details?monthly_income_aed=50000").json()
+    assert d["listing"]["listing_id"] == lid and d["community"]["community"]
+    assert d["mortgage"]["monthly_installment_aed"] > 0 and "eligible" in d["golden_visa"]
+    assert client.get("/listings/DHM-99999/details").status_code == 404
+
+
+def test_recommend_results_are_cached(client):
+    body = {"purpose": "sale", "budget_aed": 1_800_000, "min_bedrooms": 2}
+    a = client.post("/recommend?session_id=cache-1", json=body).json()
+    b = client.post("/recommend?session_id=cache-1", json=body).json()
+    assert [r["listing"]["listing_id"] for r in a["recommendations"]] == \
+           [r["listing"]["listing_id"] for r in b["recommendations"]]
+    assert b["latency_ms"] == 0.0                  # served from the cache

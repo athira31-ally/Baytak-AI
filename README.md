@@ -99,14 +99,73 @@ you're done demoing.**
 
 ## Use real Dubai data
 
-```bash
-# Download the DLD Transactions CSV from Dubai Pulse / DLD open data, then:
-python -m scripts.load_dld_transactions path/to/transactions.csv
-python -m scripts.bootstrap
+Baytak AI can run on **real Dubai Land Department (DLD) records** instead of synthetic listings, either
+**live** (recommended) or from downloaded files.
+
+### Daily: the Market Data Agent (recommended)
+
+A cron-scheduled **LLM agent** appends each day's new DLD deals instead of reloading the history.
+
+```mermaid
+flowchart LR
+    J[Container Apps Job<br/>cron 07:00 Dubai] --> A[Market Data Agent<br/>GPT-5-mini + tools]
+    A -->|HTTP Range: newest few MB| D[(data.dubai<br/>DLD CSVs)]
+    A -->|upsert new deals by id<br/>TTL = deal date + 400 days| C[(Cosmos DB<br/>market_tx)]
+    A <-->|watermark, run history,<br/>notes, brief| M[(Cosmos DB<br/>agent_memory)]
+    A -->|homes snapshot + version| R[(Redis)]
+    W[Web app] -->|poll version every 5 min| R
+    W -.->|fallback| M
 ```
 
-This computes real 12-month median AED/sq ft per community and overrides the illustrative seed values. Verify the
-DLD area → community mapping in the script (DLD uses official names, e.g. *Marsa Dubai* = Dubai Marina).
+| Tool | What it does |
+|---|---|
+| `recall_memory` | watermark (newest deal stored), store size, typical daily volume, recent runs, notes |
+| `fetch_new_deals` | only deals since watermark - 3 days. Reads data.dubai files with **HTTP Range** from the newest end (a few MB, not 1.1 GB); uses the Dubai Pulse API date filter when keys are set |
+| `validate_batch` | schema, no future dates, batch size, volume vs. history, prices vs. stored medians |
+| `append_deals` | upsert into Cosmos by transaction id, advance the watermark. **Refused in code unless validation passed** |
+| `rebuild_homes` | medians over the rolling 12 months in Cosmos, publish to Cosmos + Redis |
+| `remember` | a note for future runs (e.g. why a batch was rejected) |
+| `market_brief` | numbers for the daily report, served at `/market-brief` |
+
+Old deals expire by themselves (per-item TTL), re-sent deals just overwrite (idempotent), and the web app
+hot-swaps new homes within minutes: no rebuild, no redeploy. Deploy with `bash infra/deploy_data_agent.sh`
+(add `ENABLE_REDIS=1` for Redis). Run locally with `python -m scripts.data_agent --files data/raw/*.csv`.
+
+### Live: Dubai Pulse API (refreshes itself daily)
+
+1. Register at [dubaipulse.gov.ae](https://www.dubaipulse.gov.ae) and request access to
+   `dld_transactions-open-api` (and `dld_rent_contracts-open-api`). The API key and secret arrive by email.
+2. Put them in `.env` as `DUBAI_PULSE_API_KEY` / `DUBAI_PULSE_API_SECRET`, then run
+   `python -m scripts.check_dubai_pulse`. It checks the token, the API URLs, date filtering and the columns.
+3. Deploy with the keys set: `DUBAI_PULSE_API_KEY=... DUBAI_PULSE_API_SECRET=... bash infra/deploy.sh`
+   (plus your usual variables). They're stored as Container App secrets.
+
+The app then fetches the last 12 months in the background at startup and every 24 hours, rebuilds the homes
+and swaps them in without a restart (`app/data/live.py`). It keeps serving the previous data while refreshing
+or if the API is down. `/health` shows the data source, the latest deal date and the refresh status.
+
+### From downloaded files
+
+1. Go to the [DLD open data portal](https://dubailand.gov.ae/en/open-data/real-estate-data/) → **Transactions**,
+   set the last 12 months, and click **Download as CSV** (there's a CAPTCHA, so this step is manual).
+   Optionally do the same under **Rents** for rental homes. Older years are on
+   [Dubai Pulse](https://www.dubaipulse.gov.ae/data/dld-transactions/dld_transactions-open).
+2. Save the files as `data/raw/transactions.csv` (and `data/raw/rents.csv`). `data/raw/` is git-ignored.
+3. Build the homes file:
+   ```bash
+   python -m scripts.load_dld_real --sales data/raw/transactions.csv --rents data/raw/rents.csv
+   python -m scripts.bootstrap          # now uses data/real/dld_homes.csv automatically
+   ```
+4. Commit `data/real/` (small, aggregated). The Docker build picks it up, so the live app runs on real data.
+
+**What a "home" means with real data.** DLD publishes registered deals, not live adverts. Each recommendable
+item is a real building + unit type (e.g. a 2-bed flat in a named Marina tower), priced at the **median of its
+real registered sales or Ejari rents**, with the deal count shown. That's reliable evidence of what such a home
+costs. Live adverts come from portals (Bayut, Property Finder), which don't offer a public API, so the View panel
+links out to search for current listings in that building. User behaviour for training the ranker is still simulated.
+
+The loader prints which DLD areas it couldn't map to the 21 supported communities, so you can extend
+`DLD_AREA_HINTS` in `scripts/load_dld_real.py`.
 
 ## API
 

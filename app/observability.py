@@ -7,6 +7,9 @@ from app.config import Settings
 
 def setup(settings: Settings) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # The Azure SDKs log every HTTP request/response at INFO - far too noisy for container logs
+    for noisy in ("azure", "azure.core.pipeline.policies.http_logging_policy", "azure.monitor", "httpx", "openai"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     if settings.applicationinsights_connection_string:
         from azure.monitor.opentelemetry import configure_azure_monitor
 

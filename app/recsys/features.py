@@ -71,5 +71,9 @@ def explain(q: UserQuery, row: pd.Series, feats: pd.Series) -> list[str]:
     if c.metro_km <= 1.0:
         reasons.append("Walking distance to the Metro")
     if row.get("off_plan"):
-        reasons.append(f"Off-plan, handover {int(row['handover_year'])}")
-    return reasons[:5]
+        hy = row.get("handover_year")
+        reasons.append(f"Off-plan, handover {int(hy)}" if pd.notna(hy) else "Mostly off-plan sales")
+    n = row.get("n_transactions")
+    if pd.notna(n) and n:
+        reasons.insert(0, f"Priced from {int(n)} real DLD {'sales' if row['purpose'] == 'sale' else 'rent contracts'}")
+    return reasons[:6]

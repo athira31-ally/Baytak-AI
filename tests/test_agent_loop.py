@@ -46,3 +46,23 @@ def test_reasoning_model_without_temperature(client):
     agent.client = NS(chat=NS(completions=ReasoningModelCompletions()))
     r = agent.chat(ChatRequest(message="2 bed near DIFC, 2M"))
     assert r.mode == "azure-openai" and not agent.temperature_ok
+
+
+class EffortRecorder(ReasoningModelCompletions):
+    def __init__(self):
+        super().__init__()
+        self.efforts = []
+
+    def create(self, **kw):
+        if "temperature" not in kw:
+            self.efforts.append(kw.get("reasoning_effort"))
+        return super().create(**kw)
+
+
+def test_reasoning_models_get_low_effort(client):
+    from app.main import state
+    agent = Agent(state["rec"], state["rec"].s)
+    fake = EffortRecorder()
+    agent.client = NS(chat=NS(completions=fake))
+    agent.chat(ChatRequest(message="2 bed near DIFC, 2M"))
+    assert fake.efforts and all(e == "low" for e in fake.efforts)

@@ -37,7 +37,12 @@ Rules:
 - Commute times and market figures are estimates; say so briefly.
 - Reply in the user's language (Arabic or English). Keep it concise: 3-5 picks, one line of reasoning each,
   then one practical next step (e.g. viewing, mortgage pre-approval, checking the Ejari/RERA rental index).
-- You are not a licensed financial or legal advisor; add a one-line disclaimer when discussing money or visas."""
+- You are not a licensed financial or legal advisor; add a one-line disclaimer when discussing money or visas.
+- You can only search and analyse. Never offer to book viewings, contact agents, or fetch data you have no tool for;
+  suggest the user do those steps themselves.
+- Homes marked data_source=DLD are real buildings priced from the median of real Dubai Land Department
+  transactions (n_transactions deals) - say so, and note they are price evidence, not live adverts.
+  Other homes are synthetic demo data; never present those as real."""
 
 
 def _summ(result: dict) -> str:
@@ -51,8 +56,12 @@ class Agent:
         self.s = settings
         self.client = azure_openai_client(settings) if settings.use_azure_openai else None
         self.temperature_ok = True  # reasoning models (gpt-5*, o-series) reject a custom temperature
+        self.reasoning_effort = settings.llm_reasoning_effort or None
 
     def _complete(self, **kw):
+        """Call the chat model. Classic models get temperature=0.2. Reasoning models
+        (gpt-5*, o-series) reject that, so we switch to a low reasoning effort instead,
+        which also keeps latency down (the default 'medium' can take 30s+ per turn)."""
         kw.setdefault("model", self.s.azure_openai_chat_deployment)
         if self.temperature_ok:
             try:
@@ -60,8 +69,16 @@ class Agent:
             except Exception as e:
                 if "temperature" not in str(e).lower():
                     raise
-                log.info("Model rejected temperature; retrying without it")
+                log.info("Model rejected temperature; treating it as a reasoning model")
                 self.temperature_ok = False
+        if self.reasoning_effort:
+            try:
+                return self.client.chat.completions.create(reasoning_effort=self.reasoning_effort, **kw)
+            except Exception as e:
+                if "reasoning" not in str(e).lower():
+                    raise
+                log.info("Model rejected reasoning_effort; retrying without it")
+                self.reasoning_effort = None
         return self.client.chat.completions.create(**kw)
 
     def chat(self, req: ChatRequest) -> ChatResponse:

@@ -29,11 +29,11 @@ def assign_variant(session_id: str, ranker_share: float) -> str:
 
 
 def to_listing(row: pd.Series) -> Listing:
-    d = row.to_dict()
-    for k in ("annual_rent_aed", "handover_year"):
-        v = d.get(k)
-        d[k] = None if v is None or (isinstance(v, float) and np.isnan(v)) else int(v)
-    d["amenities"] = list(d.get("amenities", []))
+    d = {k: (None if isinstance(v, float) and np.isnan(v) else v) for k, v in row.to_dict().items()}
+    for k in ("annual_rent_aed", "handover_year", "n_transactions"):
+        d[k] = None if d.get(k) is None else int(d[k])
+    d["amenities"] = list(d.get("amenities") or [])
+    d["data_source"] = d.get("data_source") or "synthetic"
     return Listing(**{k: d[k] for k in Listing.model_fields if k in d})
 
 
@@ -55,6 +55,19 @@ class Recommender:
         self.bandit = CommunityThompsonBandit()
         self.by_id = self.listings.set_index("listing_id", drop=False)
         self.refresh_bandit()
+
+    def swap_listings(self, listings: pd.DataFrame) -> None:
+        """Hot-swap the catalogue (live data refresh). The ranker scores features, not item IDs,
+        so it works on new homes without retraining."""
+        listings = listings.reset_index(drop=True)
+        if self.s.use_azure_search:
+            log.warning("Live refresh with Azure AI Search needs a re-index; keeping the indexed catalogue")
+            return
+        vectors = self.embedder.embed(listings["description"].tolist())
+        retriever = LocalRetriever(listings, vectors, self.embedder)
+        by_id = listings.set_index("listing_id", drop=False)
+        # attribute assignment is atomic: in-flight requests finish on the old catalogue
+        self.listings, self.retriever, self.by_id = listings, retriever, by_id
 
     def refresh_bandit(self) -> None:
         try:

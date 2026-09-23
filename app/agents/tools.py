@@ -7,10 +7,12 @@ from typing import Any, Callable
 
 from pydantic import ValidationError
 
-from app.config import Settings
+from app.config import ROOT, Settings
 from app.data.reference import COMMUNITIES, commute_minutes, resolve_community, resolve_hub
 from app.recsys.pipeline import Recommender
 from app.schemas import UserQuery
+
+REAL_PRICES = (ROOT / "data" / "real" / "community_overrides.json").exists()
 
 DISCLAIMER = "Estimates only - confirm with your bank / DLD / GDRFA. Not financial advice."
 
@@ -43,6 +45,8 @@ class Toolbox:
                 "price_aed": r.listing.price_aed, "annual_rent_aed": r.listing.annual_rent_aed,
                 "off_plan": r.listing.off_plan, "commute_min": r.commute_min,
                 "golden_visa_eligible": r.golden_visa_eligible, "reasons": r.reasons,
+                "data_source": r.listing.data_source, "building": r.listing.building,
+                "n_transactions": r.listing.n_transactions,
             } for r in resp.recommendations[:6]],
         }
 
@@ -102,7 +106,8 @@ class Toolbox:
         return {"community": c.name, "name_ar": c.name_ar, "avg_price_psf_aed": c.price_psf,
                 "gross_rental_yield": c.gross_yield, "metro_km": c.metro_km, "school_score_0_4": c.school_score,
                 "property_types": list(c.types), "tags": list(c.tags),
-                "data_note": "Illustrative seed data - replace with DLD/RERA figures"}
+                "data_note": ("Price per sq ft: real DLD median (last 12 months). " if REAL_PRICES else "Price per sq ft: illustrative. ")
+                             + "Yield, metro distance and school score: illustrative estimates."}
 
     # --------------------------------------------------------------- dispatch
     def call(self, name: str, args: dict[str, Any]) -> dict:

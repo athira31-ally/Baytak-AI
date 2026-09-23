@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = "2025-04-01-preview"   # needed for newer (incl. reasoning) models
     azure_openai_chat_deployment: str = "chat"         # deployment NAME, not model name
     azure_openai_embedding_deployment: str = "text-embedding-3-small"
+    llm_reasoning_effort: str = "low"   # for reasoning models: minimal | low | medium | high
     # "local" (TF-IDF+SVD, free, baked into the image) or "azure" (needed for Azure AI Search).
     # Listing vectors are built at bootstrap time, so changing this means re-running bootstrap.
     embedding_provider: str = "local"
@@ -35,6 +36,28 @@ class Settings(BaseSettings):
     cosmos_key: str | None = None
     cosmos_database: str = "homematch"
     cosmos_container: str = "feedback"
+
+    # --- Live Dubai Land Department data (Dubai Pulse API) ---
+    dubai_pulse_api_key: str | None = None
+    dubai_pulse_api_secret: str | None = None
+    dubai_pulse_sales_url: str = "https://api.dubaipulse.gov.ae/open/dld/dld_transactions-open-api"
+    dubai_pulse_rents_url: str | None = "https://api.dubaipulse.gov.ae/open/dld/dld_rent_contracts-open-api"
+    live_refresh_hours: float = 24      # DLD publishes daily
+    live_months: int = 12
+    live_max_rows: int = 300_000
+    # --- Market Data Agent (daily refresh from data.dubai files) ---
+    dld_file_urls: str | None = None       # comma-separated; leave empty to auto-discover on data.dubai
+    max_data_age_days: int = 10            # validation: latest deal must be this recent
+    min_homes: int = 500                   # validation: minimum homes built
+    min_communities: int = 12              # validation: of the 21 supported communities
+    max_price_drift: float = 0.25          # validation: max day-on-day change in community AED/sq ft
+    max_new_deals_per_run: int = 30_000    # validation: a normal day is a few hundred to a few thousand
+    refetch_overlap_days: int = 7          # re-read the last week: DLD publishes ~4 days behind and registers some deals late
+    # Where the rolling deal store + published homes live (Azure Blob). Empty = local folder.
+
+    # --- Hot cache (Azure Cache for Redis). Empty = in-process cache ---
+    redis_url: str | None = None            # e.g. rediss://:<key>@<name>.redis.cache.windows.net:6380/0
+    homes_sync_seconds: int = 300           # how often the app checks for a new homes version
 
     # --- Observability ---
     applicationinsights_connection_string: str | None = None
@@ -59,6 +82,10 @@ class Settings(BaseSettings):
     @property
     def use_azure_search(self) -> bool:
         return bool(self.azure_search_endpoint)
+
+    @property
+    def use_live_data(self) -> bool:
+        return bool(self.dubai_pulse_api_key and self.dubai_pulse_api_secret)
 
     @property
     def use_cosmos(self) -> bool:

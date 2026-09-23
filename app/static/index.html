@@ -25,12 +25,18 @@
   .row button.on { background:var(--accent); color:#fff; border-color:var(--accent) }
   details { margin-top:18px; font-size:13px; color:var(--muted) } pre { white-space:pre-wrap; font-size:12px }
   @media (max-width:600px){ form { grid-template-columns:1fr } }
+  dialog { border:1px solid var(--line); border-radius:14px; padding:0; max-width:560px; width:calc(100% - 32px); background:var(--card); color:var(--ink) }
+  dialog::backdrop { background:rgba(0,0,0,.45) }
+  .dlg { padding:20px } .dlg h2 { margin:0 0 4px; font-size:20px } .dlg h4 { margin:16px 0 6px; font-size:14px }
+  .kv { display:grid; grid-template-columns:1fr 1fr; gap:4px 16px; font-size:14px } .kv span:nth-child(odd) { color:var(--muted) }
+  .note { font-size:12px; color:var(--muted); margin-top:14px } .close { float:right; background:transparent; color:var(--ink); border:1px solid var(--line); padding:4px 10px }
 </style>
 </head>
 <body>
 <main>
   <h1>Baytak AI <span style="font-weight:400;color:var(--muted)">&middot; بيتك</span></h1>
-  <p class="sub">Tell me what you need, in English or Arabic. An AI agent searches, ranks and checks affordability for you.</p>
+  <p class="sub">Tell me what you need, in English or Arabic. An AI agent searches, ranks and checks affordability for you.
+    <br><span id="datasrc" style="font-size:13px"></span></p>
   <form id="f">
     <textarea id="msg" placeholder="e.g. Family of 4, budget AED 2.2M, I work in DIFC, want good schools and Golden Visa eligibility"></textarea>
     <input id="income" type="number" placeholder="Monthly income (AED, optional)">
@@ -45,17 +51,69 @@
   </div>
   <div id="out"></div>
 </main>
+<dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
 <script>
 const $ = s => document.querySelector(s);
 let sessionId = null;
 try { sessionId = localStorage.getItem("dhm_session"); } catch (e) {}
 const fmt = n => n == null ? "" : "AED " + Number(n).toLocaleString();
+fetch("/health").then(r => r.json()).then(h => {
+  const d = h.data || {};
+  $("#datasrc").textContent = d.source === "DLD (real)"
+    ? `Real Dubai Land Department data · ${d.homes.toLocaleString()} homes · latest deal ${d.latest_deal}`
+    : "Demo data (synthetic listings)";
+}).catch(() => {});
 document.querySelectorAll("#ex span").forEach(s => s.onclick = () => { $("#msg").value = s.textContent; });
 
 async function send(event, rec, btn) {
   await fetch("/feedback", { method:"POST", headers:{ "Content-Type":"application/json" },
     body: JSON.stringify({ session_id: sessionId, listing_id: rec.listing.listing_id, event, position: rec.rank, source: rec.source }) });
   btn.classList.add("on");
+  if (event === "click") showDetails(rec);
+}
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+const row = (k, v) => v == null || v === "" ? "" : `<span>${esc(k)}</span><span>${esc(v)}</span>`;
+
+async function showDetails(rec) {
+  const id = rec.listing.listing_id, body = $("#dlgBody");
+  body.innerHTML = "<p class='sub'>Loading...</p>"; $("#dlg").showModal();
+  const income = parseFloat($("#income").value);
+  const r = await fetch(`/listings/${id}/details` + (isNaN(income) ? "" : `?monthly_income_aed=${income}`));
+  if (!r.ok) { body.innerHTML = "<p>Could not load this listing.</p>"; return; }
+  const d = await r.json(), l = d.listing, c = d.community, m = d.mortgage, gv = d.golden_visa;
+  const beds = l.bedrooms ? l.bedrooms + "BR" : "Studio", real = l.data_source === "DLD";
+  const q = encodeURIComponent(`${l.building || ""} ${l.community} ${beds} for ${l.purpose === "sale" ? "sale" : "rent"} Dubai`);
+  body.innerHTML = `<button class="close" onclick="document.getElementById('dlg').close()">Close</button>
+    <h2>${beds} ${esc(l.property_type)} · ${esc(l.community)}</h2>
+    <div class="sub" style="margin:0">${esc(l.listing_id)} · ${c.name_ar ? esc(c.name_ar) : ""}</div>
+    <h4>Property</h4><div class="kv">
+      ${row(l.purpose === "sale" ? "Price" : "Annual rent", l.purpose === "sale" ? fmt(l.price_aed) : fmt(l.annual_rent_aed))}
+      ${row("Size", l.size_sqft.toLocaleString() + " sq ft")}
+      ${l.purpose === "sale" ? row("Price / sq ft", fmt(d.price_per_sqft)) : ""}
+      ${row("Status", l.off_plan ? "Off-plan" + (l.handover_year ? ", handover " + l.handover_year : "") : "Ready")}
+      ${real ? row("Building / project", [l.building, l.project].filter(Boolean).join(" · ")) : row("Furnished", l.furnished ? "Yes" : "No")}
+      ${real ? row("Real deals behind this price", l.n_transactions + " (latest " + l.last_transaction_date + ")") : row("Listed", l.days_listed + " days ago")}
+    </div>
+    <p style="font-size:14px">${esc((l.amenities || []).join(" · "))}</p>
+    <h4>Community</h4><div class="kv">
+      ${row("Avg price / sq ft", fmt(c.avg_price_psf_aed))}
+      ${row("Gross rental yield", (c.gross_rental_yield * 100).toFixed(1) + "%")}
+      ${row("Nearest metro", c.metro_km + " km")}
+      ${row("Schools (0-4)", c.school_score_0_4)}
+      ${row("Known for", (c.tags || []).join(", "))}
+    </div>
+    ${m ? `<h4>If you buy with a mortgage (estimate)</h4><div class="kv">
+      ${row("Max loan-to-value", Math.round(m.max_ltv * 100) + "%")}
+      ${row("Down payment", fmt(m.upfront_costs.down_payment))}
+      ${row("DLD fee (4%)", fmt(m.upfront_costs.dld_transfer_fee_4pct))}
+      ${row("Total cash upfront", fmt(m.total_cash_needed_aed))}
+      ${row("Monthly payment", fmt(m.monthly_installment_aed) + " @ " + (m.assumed_rate * 100).toFixed(1) + "%, " + m.tenure_years + "y")}
+      ${m.debt_burden_ratio != null ? row("Debt-burden ratio", Math.round(m.debt_burden_ratio * 100) + "% " + (m.within_dbr_cap ? "(within 50% cap)" : "(above 50% cap)")) : ""}
+      ${row("Golden Visa", gv && gv.eligible ? "Eligible (≥ AED 2M)" : "Below AED 2M threshold")}
+    </div>` : ""}
+    ${real ? `<p style="font-size:14px"><a href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener">Find live listings for this building</a></p>` : ""}
+    <p class="note">${esc(d.data_note)} Mortgage and visa figures are simplified estimates - not financial advice.</p>`;
 }
 
 $("#f").onsubmit = async e => {
@@ -79,7 +137,7 @@ $("#f").onsubmit = async e => {
     const price = l.purpose === "sale" ? fmt(l.price_aed) : fmt(l.annual_rent_aed) + "/yr";
     c.innerHTML = `<span class="pill">${rec.source === "explore" ? "new - exploring" : "#" + rec.rank} &middot; ${l.listing_id}</span>
       <h3>${l.bedrooms ? l.bedrooms + "BR" : "Studio"} ${l.property_type} &middot; ${l.community}</h3>
-      <div class="price">${price}</div><div class="sub" style="margin:0">${l.size_sqft.toLocaleString()} sq ft${l.off_plan ? " &middot; off-plan " + l.handover_year : ""}</div>
+      <div class="price">${price}</div><div class="sub" style="margin:0">${l.size_sqft.toLocaleString()} sq ft${l.off_plan ? " &middot; off-plan" + (l.handover_year ? " " + l.handover_year : "") : ""}${l.data_source === "DLD" ? " &middot; " + esc(l.building || "") : ""}</div>
       <ul>${rec.reasons.map(x => `<li>${x}</li>`).join("")}</ul>
       <div class="row"><button data-e="click">View</button><button data-e="save">Save</button><button data-e="dismiss">Not for me</button></div>`;
     c.querySelectorAll("button").forEach(b => b.onclick = () => send(b.dataset.e, rec, b));

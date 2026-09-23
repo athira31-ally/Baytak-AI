@@ -53,8 +53,11 @@ def _apply_real_data_overrides() -> None:
     """If scripts/load_dld_transactions.py has produced real medians, use them."""
     import dataclasses, json, os
     from pathlib import Path
-    path = Path(os.getenv("DATA_DIR", Path(__file__).resolve().parents[2] / "artifacts")) / "community_overrides.json"
-    if not path.exists():
+    root = Path(__file__).resolve().parents[2]
+    candidates = [Path(os.getenv("DATA_DIR", root / "artifacts")) / "community_overrides.json",
+                  root / "data" / "real" / "community_overrides.json"]
+    path = next((c for c in candidates if c.exists()), None)
+    if path is None or os.getenv("BAYTAK_SYNTHETIC_ONLY"):
         return
     over = json.loads(path.read_text()).get("communities", {})
     for i, c in enumerate(COMMUNITIES):
@@ -64,6 +67,19 @@ def _apply_real_data_overrides() -> None:
 
 _apply_real_data_overrides()
 COMMUNITY_BY_NAME = {c.name.lower(): c for c in COMMUNITIES}
+
+
+
+def apply_price_overrides(over: dict) -> None:
+    """Swap in real median AED/sq ft at runtime (live refresh). Mutates in place so every
+    module that imported COMMUNITIES / COMMUNITY_BY_NAME sees the new values."""
+    import dataclasses
+    for i, c in enumerate(COMMUNITIES):
+        if c.name in over:
+            new = dataclasses.replace(c, price_psf=int(over[c.name]["price_psf"]))
+            COMMUNITIES[i] = new
+            COMMUNITY_BY_NAME[c.name.lower()] = new
+
 
 # Common short names people actually type
 COMMUNITY_ALIASES = {

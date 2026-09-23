@@ -35,8 +35,14 @@ class Listing(BaseModel):
     handover_year: int | None = None
     furnished: bool = False
     amenities: list[str] = []
-    days_listed: int = 0
+    days_listed: int = 0          # synthetic: days on market; DLD: days since the latest real deal
     description: str = ""
+    # Present when the home comes from real Dubai Land Department data
+    data_source: str = "synthetic"
+    building: str | None = None
+    project: str | None = None
+    n_transactions: int | None = None
+    last_transaction_date: str | None = None
 
 
 class Recommendation(BaseModel):

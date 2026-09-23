@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import ndcg_score
 
-from app.config import get_settings
+from app.config import ROOT, get_settings
 from app.data.reference import COMMUNITY_BY_NAME, resolve_hub
 from app.data.synthetic import generate_listings, sample_user, true_utility
 from app.recsys.embeddings import LocalEmbedder, get_embedder
@@ -58,11 +58,27 @@ def evaluate(df: pd.DataFrame, scores: np.ndarray, k: int = 10) -> dict:
             f"hit_rate@{k}(contact)": round(float(np.mean(hit)), 4), "queries": len(ndcg)}
 
 
-def main(n_listings: int, n_users: int) -> None:
+REAL_HOMES = ROOT / "data" / "real" / "dld_homes.csv"
+
+
+def load_real_homes(path=REAL_HOMES) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    df["amenities"] = df["amenities"].fillna("").map(lambda s: [a for a in str(s).split("|") if a])
+    for c in ("off_plan", "furnished"):
+        df[c] = df[c].astype(bool)
+    return df
+
+
+def main(n_listings: int, n_users: int, source: str = "auto") -> None:
     s = get_settings()
     t0 = time.time()
-    print(f"[1/5] Generating {n_listings} listings")
-    listings = generate_listings(n_listings)
+    use_real = source == "real" or (source == "auto" and REAL_HOMES.exists())
+    if use_real:
+        listings = load_real_homes()
+        print(f"[1/5] Loaded {len(listings):,} REAL homes from {REAL_HOMES.relative_to(ROOT)} (Dubai Land Department)")
+    else:
+        print(f"[1/5] Generating {n_listings} synthetic listings")
+        listings = generate_listings(n_listings)
     listings.to_pickle(s.data_dir / "listings.pkl")
 
     print("[2/5] Embedding listing descriptions")
@@ -90,7 +106,7 @@ def main(n_listings: int, n_users: int) -> None:
     print("[5/5] Offline evaluation on held-out users")
     test = parts["test"]
     metrics = {
-        "embedder": embedder.name,
+        "embedder": embedder.name, "data_source": "DLD (real)" if use_real else "synthetic",
         "n_listings": n_listings, "n_sessions": int(n), "rows": len(data),
         "ranker": evaluate(test, ranker.score(test)),
         "baseline_retrieval": evaluate(test, test["retrieval_score"].to_numpy()),
@@ -106,5 +122,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--listings", type=int, default=3000)
     ap.add_argument("--users", type=int, default=2500)
+    ap.add_argument("--source", choices=["auto", "real", "synthetic"], default="auto",
+                    help="auto = real DLD homes if data/real/dld_homes.csv exists, else synthetic")
     a = ap.parse_args()
-    main(a.listings, a.users)
+    main(a.listings, a.users, a.source)

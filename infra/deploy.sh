@@ -107,6 +107,7 @@ else
 fi
 AI_CONN=$(az monitor app-insights component show --app "$APPI" -g "$RG" --query connectionString -o tsv)
 
+
 SEARCH_ENV=()
 if [ "$ENABLE_SEARCH" = "1" ]; then
   echo ">> Azure AI Search (basic)"
@@ -169,15 +170,24 @@ fi
 echo ">> Secrets + environment"
 SECRETS=(cosmos-key="$COSMOS_KEY" appi-conn="$AI_CONN" ${AOAI_SECRET[@]+"${AOAI_SECRET[@]}"})
 if [ "$ENABLE_SEARCH" = "1" ]; then SECRETS+=(search-key="$SEARCH_KEY"); fi
+LIVE_ENV=()
+if [ -n "${DUBAI_PULSE_API_KEY:-}" ] && [ -n "${DUBAI_PULSE_API_SECRET:-}" ]; then
+  echo "   live DLD data: ON (Dubai Pulse API)"
+  SECRETS+=(pulse-key="$DUBAI_PULSE_API_KEY" pulse-secret="$DUBAI_PULSE_API_SECRET")
+  LIVE_ENV=(DUBAI_PULSE_API_KEY=secretref:pulse-key DUBAI_PULSE_API_SECRET=secretref:pulse-secret)
+fi
 az containerapp secret set -n "$APP" -g "$RG" --secrets "${SECRETS[@]}" -o none
 az containerapp update -n "$APP" -g "$RG" --min-replicas 0 --max-replicas 2 -o none --set-env-vars \
   ${AOAI_ENV[@]+"${AOAI_ENV[@]}"} \
   COSMOS_ENDPOINT="$COSMOS_ENDPOINT" COSMOS_KEY=secretref:cosmos-key \
-  APPLICATIONINSIGHTS_CONNECTION_STRING=secretref:appi-conn ${SEARCH_ENV[@]+"${SEARCH_ENV[@]}"}
+  APPLICATIONINSIGHTS_CONNECTION_STRING=secretref:appi-conn ${SEARCH_ENV[@]+"${SEARCH_ENV[@]}"} \
+  ${LIVE_ENV[@]+"${LIVE_ENV[@]}"}
 
 URL=$(az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)
 echo ""
 echo "Deployed: https://$URL"
 echo "Health:   https://$URL/health   (expect \"llm\": \"azure-openai\"; first request after idle takes ~20s)"
 echo "API docs: https://$URL/docs"
+echo ""
 echo "Tear down everything: az group delete -n $RG --yes --no-wait"
+echo "Daily data agent + Redis: bash infra/deploy_data_agent.sh  (see README)"

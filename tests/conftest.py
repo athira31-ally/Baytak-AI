@@ -5,6 +5,8 @@ import tempfile
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="dhm-test-")
 for var in ("AZURE_OPENAI_ENDPOINT", "AZURE_SEARCH_ENDPOINT", "COSMOS_ENDPOINT", "APPLICATIONINSIGHTS_CONNECTION_STRING"):
     os.environ.pop(var, None)
+os.environ["BAYTAK_SYNTHETIC_ONLY"] = "1"
+os.environ["DUBAI_PULSE_API_KEY"] = ""
 os.environ["AZURE_OPENAI_ENDPOINT"] = ""  # force offline mode even if a local .env sets it
 os.environ["AZURE_SEARCH_ENDPOINT"] = ""
 os.environ["COSMOS_ENDPOINT"] = ""
@@ -14,7 +16,7 @@ import pytest  # noqa: E402
 
 from scripts.bootstrap import main as bootstrap  # noqa: E402
 
-bootstrap(n_listings=1200, n_users=400)
+bootstrap(n_listings=1200, n_users=400, source="synthetic")
 
 
 @pytest.fixture(scope="session")
