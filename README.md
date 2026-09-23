@@ -1,6 +1,6 @@
-# Dubai Home Match
+# Baytak AI · بيتك
 
-**An agentic AI property recommender for Dubai, built on Azure.**
+**An agentic AI property recommender for Dubai, built on Azure.** *Baytak* is Arabic for "your home".
 
 A user asks, in English or Arabic, something like *"Family of 4, budget AED 2.2M, I work in DIFC, want good
 schools and Golden Visa eligibility"*. An AI agent works out what they need and calls tools to search, rank,

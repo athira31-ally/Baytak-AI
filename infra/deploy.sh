@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy Dubai Home Match to Azure with the az CLI.
+# Deploy Baytak AI to Azure with the az CLI.
 #
 #   az login --tenant <tenant-id>
 #   export SUFFIX=24680                  # keep the same SUFFIX when re-running
@@ -16,7 +16,7 @@ LOCATION=${LOCATION:-uaenorth}
 AOAI_LOCATION=${AOAI_LOCATION:-swedencentral}
 COSMOS_LOCATION=${COSMOS_LOCATION:-$LOCATION}
 SUFFIX=${SUFFIX:?Set SUFFIX first, e.g. export SUFFIX=24680 (reuse the same value on re-runs)}
-APP=${APP:-dubai-home-match}
+APP=${APP:-baytak-ai}
 CHAT_MODEL=${CHAT_MODEL:-gpt-4.1-mini}
 CHAT_MODEL_VERSION=${CHAT_MODEL_VERSION:-}
 CHAT_DEPLOYMENT=chat
@@ -136,7 +136,7 @@ fi
 # How the image gets built:
 #   default         Azure builds the Dockerfile (ACR Tasks) - blocked on some free/trial subscriptions
 #   BUILD=local     build with Docker Desktop on this Mac and push to your Azure Container Registry
-#   IMAGE=<ref>     use a ready-made public image, e.g. ghcr.io/<you>/dubai-home-match:latest
+#   IMAGE=<ref>     use a ready-made public image, e.g. ghcr.io/<you>/baytak-ai:latest
 BUILD=${BUILD:-acr}
 if [ -n "${IMAGE:-}" ]; then
   echo "   using prebuilt image $IMAGE"
@@ -161,7 +161,7 @@ else
   if ! az containerapp up -n "$APP" -g "$RG" -l "$LOCATION" --source . --ingress external --target-port 8000 \
       ${ENV_ARGS[@]+"${ENV_ARGS[@]}"}; then
     echo "!! Cloud build failed. If the error says 'TasksOperationsNotAllowed', your subscription blocks ACR Tasks."
-    echo "   Re-run with BUILD=local (needs Docker Desktop) or IMAGE=ghcr.io/<you>/dubai-home-match:latest"
+    echo "   Re-run with BUILD=local (needs Docker Desktop) or IMAGE=ghcr.io/<you>/baytak-ai:latest"
     exit 1
   fi
 fi

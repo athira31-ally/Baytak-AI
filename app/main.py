@@ -1,4 +1,4 @@
-"""Dubai Home Match API."""
+"""Baytak AI API."""
 from __future__ import annotations
 
 import json
@@ -30,7 +30,7 @@ async def lifespan(_: FastAPI):
     state.clear()
 
 
-app = FastAPI(title="Dubai Home Match", version="0.1.0", lifespan=lifespan,
+app = FastAPI(title="Baytak AI", version="0.1.0", lifespan=lifespan,
               description="Agentic property recommender for Dubai - Azure OpenAI + AI Search + LightGBM")
 app.mount("/static", StaticFiles(directory=ROOT / "app" / "static"), name="static")
 

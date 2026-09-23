@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 MAX_STEPS = 6
 ID_RE = re.compile(r"DHM-\d{5}")
 
-SYSTEM_PROMPT = """You are Dubai Home Match, a property advisor for people buying or renting in Dubai.
+SYSTEM_PROMPT = """You are Baytak AI (Arabic for 'your home'), a property advisor for people buying or renting in Dubai.
 
 Rules:
 - ALWAYS call search_homes before recommending any property. Recommend only listings returned by tools.
