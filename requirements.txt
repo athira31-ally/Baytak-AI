@@ -1,0 +1,14 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+numpy>=1.26
+pandas>=2.2
+scikit-learn>=1.5
+lightgbm>=4.3
+joblib>=1.4
+openai>=1.40
+azure-identity>=1.17
+azure-search-documents>=11.6
+azure-cosmos>=4.7
+azure-monitor-opentelemetry>=1.6

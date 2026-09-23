@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dubai Home Match</title>
+<style>
+  :root { --bg:#f7f5f0; --card:#fff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e4e0d6; --accent:#0f6e5c; --warn:#b45309; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141413; --card:#1f1f1d; --ink:#f1efe8; --muted:#a3a29b; --line:#34332f; --accent:#3fb89c; } }
+  * { box-sizing:border-box } body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--ink) }
+  main { max-width:960px; margin:0 auto; padding:24px 16px 64px }
+  h1 { font-size:24px; margin:0 } .sub { color:var(--muted); margin:4px 0 20px }
+  form { display:grid; grid-template-columns:1fr 180px auto; gap:8px }
+  textarea,input,button { font:inherit; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink) }
+  textarea { grid-column:1/-1; min-height:72px; resize:vertical }
+  button { background:var(--accent); color:#fff; border:0; cursor:pointer; font-weight:600 } button:disabled { opacity:.6 }
+  .ex { display:flex; gap:6px; flex-wrap:wrap; margin:10px 0 18px } .ex span { font-size:13px; padding:4px 10px; border:1px solid var(--line); border-radius:99px; cursor:pointer; color:var(--muted) }
+  .answer { white-space:pre-wrap; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px }
+  .meta { font-size:12px; color:var(--muted); margin:-8px 0 16px } .flag { color:var(--warn) }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; display:flex; flex-direction:column; gap:6px }
+  .card h3 { margin:0; font-size:16px } .price { font-weight:700 } .pill { font-size:11px; padding:2px 8px; border-radius:99px; background:var(--line); color:var(--muted); align-self:flex-start }
+  .card ul { margin:4px 0; padding-left:18px; color:var(--muted); font-size:13px } .row { display:flex; gap:6px; margin-top:auto }
+  .row button { flex:1; padding:6px; font-size:13px; background:transparent; color:var(--ink); border:1px solid var(--line) }
+  .row button.on { background:var(--accent); color:#fff; border-color:var(--accent) }
+  details { margin-top:18px; font-size:13px; color:var(--muted) } pre { white-space:pre-wrap; font-size:12px }
+  @media (max-width:600px){ form { grid-template-columns:1fr } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Dubai Home Match</h1>
+  <p class="sub">Tell me what you need, in English or Arabic. An AI agent searches, ranks and checks affordability for you.</p>
+  <form id="f">
+    <textarea id="msg" placeholder="e.g. Family of 4, budget AED 2.2M, I work in DIFC, want good schools and Golden Visa eligibility"></textarea>
+    <input id="income" type="number" placeholder="Monthly income (AED, optional)">
+    <span></span>
+    <button id="go">Find homes</button>
+  </form>
+  <div class="ex" id="ex">
+    <span>Family of 4, budget 2.2M, work in DIFC, good schools, Golden Visa</span>
+    <span>1 bed to rent near the metro, 8k per month, I work at Internet City</span>
+    <span>Investment apartment under 1M with high rental yield</span>
+    <span>أبحث عن فيلا للعائلة قريبة من المدارس بميزانية 3 مليون</span>
+  </div>
+  <div id="out"></div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+let sessionId = null;
+try { sessionId = localStorage.getItem("dhm_session"); } catch (e) {}
+const fmt = n => n == null ? "" : "AED " + Number(n).toLocaleString();
+document.querySelectorAll("#ex span").forEach(s => s.onclick = () => { $("#msg").value = s.textContent; });
+
+async function send(event, rec, btn) {
+  await fetch("/feedback", { method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ session_id: sessionId, listing_id: rec.listing.listing_id, event, position: rec.rank, source: rec.source }) });
+  btn.classList.add("on");
+}
+
+$("#f").onsubmit = async e => {
+  e.preventDefault();
+  const message = $("#msg").value.trim(); if (!message) return;
+  $("#go").disabled = true; $("#out").innerHTML = "<p class='sub'>Agent is working...</p>";
+  const income = parseFloat($("#income").value);
+  const r = await fetch("/chat", { method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ message, session_id: sessionId, monthly_income_aed: isNaN(income) ? null : income }) });
+  const d = await r.json(); $("#go").disabled = false;
+  sessionId = d.session_id; try { localStorage.setItem("dhm_session", sessionId); } catch (e) {}
+  const out = $("#out"); out.innerHTML = "";
+  const a = document.createElement("div"); a.className = "answer"; a.dir = "auto"; a.textContent = d.answer; out.append(a);
+  const m = document.createElement("div"); m.className = "meta";
+  m.innerHTML = `${d.mode} &middot; ${d.tool_trace.length} tool calls &middot; ${d.latency_ms} ms &middot; ` +
+    (d.grounded ? "grounded" : `<span class="flag">ungrounded IDs: ${d.ungrounded_ids.join(", ")}</span>`);
+  out.append(m);
+  const g = document.createElement("div"); g.className = "grid"; out.append(g);
+  d.recommendations.forEach(rec => {
+    const l = rec.listing, c = document.createElement("div"); c.className = "card";
+    const price = l.purpose === "sale" ? fmt(l.price_aed) : fmt(l.annual_rent_aed) + "/yr";
+    c.innerHTML = `<span class="pill">${rec.source === "explore" ? "new - exploring" : "#" + rec.rank} &middot; ${l.listing_id}</span>
+      <h3>${l.bedrooms ? l.bedrooms + "BR" : "Studio"} ${l.property_type} &middot; ${l.community}</h3>
+      <div class="price">${price}</div><div class="sub" style="margin:0">${l.size_sqft.toLocaleString()} sq ft${l.off_plan ? " &middot; off-plan " + l.handover_year : ""}</div>
+      <ul>${rec.reasons.map(x => `<li>${x}</li>`).join("")}</ul>
+      <div class="row"><button data-e="click">View</button><button data-e="save">Save</button><button data-e="dismiss">Not for me</button></div>`;
+    c.querySelectorAll("button").forEach(b => b.onclick = () => send(b.dataset.e, rec, b));
+    g.append(c);
+  });
+  const det = document.createElement("details");
+  det.innerHTML = `<summary>Agent trace</summary><pre>${JSON.stringify({ query: d.query, tools: d.tool_trace }, null, 2)
+    .replace(/</g, "&lt;")}</pre>`;
+  out.append(det);
+};
+</script>
+</body>
+</html>
