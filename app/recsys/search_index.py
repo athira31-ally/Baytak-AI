@@ -85,13 +85,27 @@ def _docs(listings: pd.DataFrame, vectors: np.ndarray, version: str, now: int):
                "off_plan": bool(r.off_plan), "description": str(r.description), "embedding": [float(x) for x in v]}
 
 
+def _create_index(index_client, definition, attempts: int = 6) -> None:
+    """Several web workers start at once and all try to create the index; the service rejects the
+    concurrent ones ("created ... concurrently"). Back off with jitter and try again."""
+    import random
+    for i in range(attempts):
+        try:
+            index_client.create_or_update_index(definition)
+            return
+        except Exception as e:
+            if "concurrent" not in str(e).lower() or i == attempts - 1:
+                raise
+            time.sleep(1.5 * (i + 1) + random.random() * 2)
+
+
 def publish(settings: Settings, listings: pd.DataFrame, vectors: np.ndarray, version: str, index_client=None,
             search_client=None) -> dict:
     """Upload a catalogue version (idempotent) and clean up versions older than an hour."""
     if index_client is None or search_client is None:
         index_client, search_client = clients(settings)
     t0 = time.time()
-    index_client.create_or_update_index(index_definition(settings.azure_search_index, int(vectors.shape[1])))
+    _create_index(index_client, index_definition(settings.azure_search_index, int(vectors.shape[1])))
     existing = search_client.search(search_text="*", filter=f"version eq '{version}'", include_total_count=True, top=0)
     have = existing.get_count() or 0
     if have >= len(listings):

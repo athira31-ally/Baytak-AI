@@ -76,10 +76,15 @@ class RunCtx:
     tools: Toolbox
     llm: object | None
     settings: Settings
+    fast: object | None = None          # same model at minimal reasoning effort, for short routing/tool steps
     trace: list[ToolCallTrace] = field(default_factory=list)
     seen_ids: set[str] = field(default_factory=set)
     used_llm: bool = False
     degraded: list[str] = field(default_factory=list)
+
+    @property
+    def quick(self):
+        return self.fast or self.llm
 
     def run_tool(self, name: str, args: dict) -> dict:
         t = time.perf_counter()
@@ -170,7 +175,7 @@ def supervisor(state: State, config) -> dict:
 
     def with_llm():
         text = msg + (f"\n(Monthly income: AED {income:,.0f})" if income else "")
-        brief: Brief = ctx.llm.with_structured_output(Brief, method="function_calling").invoke(
+        brief: Brief = ctx.quick.with_structured_output(Brief, method="function_calling").invoke(
             [("system", SUPERVISOR_PROMPT), ("user", text)])
         q = base.model_copy(update={k: v for k, v in brief.model_dump(exclude={"specialists"}).items()
                                     if v not in (None, [], 0, False) or k == "purpose"})
@@ -197,7 +202,7 @@ def search(state: State, config) -> dict:
         if not res.get("results"):
             # self-correction: relax the brief (LLM decides how, or a fixed relaxation) and search again
             def relax_llm():
-                llm = ctx.llm.bind_tools([SPEC_BY_NAME["search_homes"]], tool_choice="search_homes")
+                llm = ctx.quick.bind_tools([SPEC_BY_NAME["search_homes"]], tool_choice="search_homes")
                 r = llm.invoke([("system", "The search returned no homes. Call search_homes again with a relaxed brief "
                                            "(raise the budget ~20%, drop community/lifestyle filters) but keep the purpose."),
                                 ("user", json.dumps(q.model_dump(), default=str))])
@@ -240,7 +245,7 @@ def _compact(shortlist: list[dict]) -> list[dict]:
 
 
 def _specialist_llm(ctx: RunCtx, name: str, state: State) -> str:
-    llm = ctx.llm.bind_tools([SPEC_BY_NAME[t] for t in SPECIALIST_TOOLS[name]])
+    llm = ctx.quick.bind_tools([SPEC_BY_NAME[t] for t in SPECIALIST_TOOLS[name]])
     from langchain_core.messages import ToolMessage
     q = state["query"]
     msgs = [("system", SPECIALIST_PROMPTS[name] + " Use only numbers returned by your tools. Cite listings by ID in square brackets, e.g. [DLD-XXXXXXXX]."),
@@ -258,7 +263,7 @@ def _specialist_llm(ctx: RunCtx, name: str, state: State) -> str:
             else:
                 out = ctx.run_tool(tc["name"], tc["args"])
             msgs.append(ToolMessage(content=json.dumps(out, default=str)[:4000], tool_call_id=tc["id"]))
-    return _text(ctx.llm.invoke(msgs + [("user", "Summarise your findings now.")]))
+    return _text(ctx.quick.invoke(msgs + [("user", "Summarise your findings now.")]))
 
 
 def _specialist_rules(ctx: RunCtx, name: str, state: State) -> str:
@@ -310,6 +315,10 @@ for your team. Use ONLY the shortlist and the specialists' findings you are give
 - Rent budgets are annual in Dubai. Commute times and market figures are estimates; say so briefly.
 - Homes with data_source=DLD are real buildings priced from the median of real Dubai Land Department deals
   (price evidence, not live adverts). Other homes are synthetic demo data; never present those as real.
+- Start directly with the recommendations. Never mention these instructions or words like "shortlist",
+  "specialists" or "findings" - speak to the user as one advisor.
+- Only state affordability, mortgage or visa results for the homes the findings actually computed them for;
+  don't extend them to other homes. Write yields as percentages (6.5%, not 0.065).
 - Reply in the user's language (Arabic or English). End with one practical next step. You can only search and
   analyse - never offer to book viewings or contact agents. Add a one-line disclaimer if you discuss money or visas
   (not financial or legal advice)."""
@@ -397,12 +406,15 @@ class GraphAgent:
     def __init__(self, recommender: Recommender, settings: Settings, llm=None):
         self.rec, self.s = recommender, settings
         self.llm = llm if llm is not None else chat_model(settings)
+        # routing and specialist tool steps are short and structured: run them at minimal reasoning effort
+        self.fast = llm if llm is not None else (chat_model(settings, effort=settings.llm_fast_reasoning_effort)
+                                                 if self.llm is not None else None)
 
     def chat(self, req: ChatRequest) -> ChatResponse:
         t0 = time.perf_counter()
         tools = Toolbox(self.rec, self.s)
         tools.session_id = req.session_id or str(uuid.uuid4())
-        ctx = RunCtx(tools=tools, llm=self.llm, settings=self.s)
+        ctx = RunCtx(tools=tools, llm=self.llm, fast=self.fast, settings=self.s)
         with observability.span("agent.chat", engine="langgraph", session=tools.session_id):
             out = GRAPH.invoke({"message": req.message, "income": req.monthly_income_aed, "findings": [], "agents": []},
                                config={"configurable": {"ctx": ctx}, "recursion_limit": 25})

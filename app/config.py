@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     azure_openai_chat_model: str = "gpt-5-mini"        # the model behind that deployment (reasoning or not)
     azure_openai_embedding_deployment: str = "text-embedding-3-small"
     llm_reasoning_effort: str = "low"   # for reasoning models: minimal | low | medium | high
+    llm_fast_reasoning_effort: str = "minimal"   # LangGraph supervisor/specialists: short structured steps
     # "local" (TF-IDF+SVD, free, baked into the image) or "azure" (needed for Azure AI Search).
     # Listing vectors are built at bootstrap time, so changing this means re-running bootstrap.
     embedding_provider: str = "local"

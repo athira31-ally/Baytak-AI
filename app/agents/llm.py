@@ -43,7 +43,7 @@ def is_reasoning_model(name: str) -> bool:
     return n.startswith(("gpt-5", "o1", "o3", "o4")) or "-o1" in n or "-o3" in n
 
 
-def chat_model(settings: Settings, model_hint: str | None = None):
+def chat_model(settings: Settings, model_hint: str | None = None, effort: str | None = None):
     """LangChain chat model for the LangGraph agents (None if no LLM is configured).
 
     Reasoning models (gpt-5*, o-series) reject a custom temperature, so they get a low
@@ -62,7 +62,7 @@ def chat_model(settings: Settings, model_hint: str | None = None):
             from azure.identity import DefaultAzureCredential, get_bearer_token_provider
             kw["azure_ad_token_provider"] = get_bearer_token_provider(DefaultAzureCredential(), _SCOPE)
         if reasoning:
-            kw["reasoning_effort"] = settings.llm_reasoning_effort
+            kw["reasoning_effort"] = effort or settings.llm_reasoning_effort
         else:
             kw["temperature"] = 0.2
         return AzureChatOpenAI(**kw)

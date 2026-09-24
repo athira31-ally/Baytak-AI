@@ -69,3 +69,11 @@ def test_langgraph_team_runs_on_an_open_source_model_server(client):
     assert "visa" in r.agents and r.grounded and ID.search(r.answer)
     assert all(req["model"] == "qwen2.5:7b-instruct" for req in FakeOllama.requests)
     assert not any("reasoning_effort" in req for req in FakeOllama.requests)   # not sent to open models
+
+
+def test_azure_reasoning_model_gets_fast_and_normal_effort():
+    s = Settings(azure_openai_endpoint="https://x.openai.azure.com/", azure_openai_api_key="k",
+                 azure_openai_chat_deployment="chat", azure_openai_chat_model="gpt-5-mini")
+    assert chat_model(s).reasoning_effort == "low"
+    assert chat_model(s, effort=s.llm_fast_reasoning_effort).reasoning_effort == "minimal"
+    assert chat_model(s).temperature is None                      # reasoning models reject temperature

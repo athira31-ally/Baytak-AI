@@ -74,11 +74,17 @@ class Recommender:
         """Publish this catalogue to Azure AI Search and switch retrieval to it (local stays as fallback)."""
         from app.recsys.search_index import catalogue_version, publish
         version = catalogue_version(listings, self.embedder.signature)
-        try:
-            res = publish(self.s, listings, vectors, version, index_client, search_client)
-        except Exception as e:
-            log.warning("Azure AI Search publish failed, staying on in-memory retrieval: %s", e)
-            self.search_status = {"backend": "local", "error": str(e)[:200]}
+        res = None
+        for attempt in range(3):                      # transient errors: retry, then stay on local retrieval
+            try:
+                res = publish(self.s, listings, vectors, version, index_client, search_client)
+                break
+            except Exception as e:
+                log.warning("Azure AI Search publish failed (attempt %d/3): %s", attempt + 1, e)
+                self.search_status = {"backend": "local", "error": str(e)[:200]}
+                if attempt < 2:
+                    time.sleep(10 * (attempt + 1))
+        if res is None:
             return
         if self.listings is not listings:        # a newer catalogue arrived meanwhile; it will attach itself
             return

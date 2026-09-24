@@ -117,3 +117,20 @@ def test_odata_filter_escapes_and_versions():
     r.version = "abc"
     f = r.odata_filter(UserQuery(purpose="rent", budget_aed=100_000, preferred_communities=["Dubai Marina"]))
     assert f.startswith("version eq 'abc' and purpose eq 'rent'") and "search.in(community, 'Dubai Marina', '|')" in f
+
+
+def test_concurrent_index_creation_is_retried(rec_and_fake, monkeypatch):
+    rec, fake = rec_and_fake
+    import app.recsys.search_index as si
+    monkeypatch.setattr(si.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+    real = fake.create_or_update_index
+
+    def flaky(index):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("(OperationNotAllowed) Another request created an index named 'baytak-homes' concurrently")
+        real(index)
+    fake.create_or_update_index = flaky
+    out = si.publish(rec.s, rec.listings.head(5), np.zeros((5, 96)), "v2", fake, fake)
+    assert calls["n"] == 2 and out["uploaded"] == 5
