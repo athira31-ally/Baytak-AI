@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baytak AI · Multi-Agent Property Advisor for Dubai — Athira Kizhake Kammilli</title>
+<meta name="description" content="A multi-agent AI property advisor for Dubai on Azure: LangGraph agents, a LightGBM recommender and real Dubai Land Department data refreshed daily by a Microsoft Foundry agent.">
+<meta property="og:title" content="Baytak AI — Multi-Agent Property Advisor for Dubai">
+<meta property="og:description" content="LangGraph agents + LightGBM recommender on Azure, grounded in real DLD data refreshed daily by a Foundry agent. 22/22 live evals, 100% grounded.">
+<meta property="og:image" content="https://athira31-ally.github.io/Baytak-AI/images/00-cover.png">
+<meta property="og:url" content="https://athira31-ally.github.io/Baytak-AI/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Sans+Arabic:wght@600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0A1220;--card:#122036;--line:#243553;--ink:#F3EEE4;--muted:#93A0B8;--dim:#62708A;--sand:#D9B061;--teal:#35C2B0}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--ink);font:400 17px/1.65 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--sand);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1160px;margin:0 auto;padding:0 20px}
+nav{position:sticky;top:0;z-index:10;background:rgba(10,18,32,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px;gap:16px}
+.brand{font-weight:700;color:var(--ink)}
+.brand span{font-family:"IBM Plex Sans Arabic";color:var(--sand);margin-left:6px}
+nav .links{display:flex;gap:18px;font-size:15px;flex-wrap:wrap}
+nav .links a{color:var(--muted)}
+header{padding:72px 0 40px}
+.eyebrow{font:600 13px/1.4 Inter,system-ui,sans-serif;letter-spacing:.2em;text-transform:uppercase;color:var(--sand)}
+h1{font-size:clamp(40px,7vw,76px);line-height:1.05;letter-spacing:-.03em;font-weight:800;margin-top:18px}
+h1 .ar{font-family:"IBM Plex Sans Arabic";color:var(--sand);font-weight:600;margin-left:14px}
+.lede{font-size:clamp(18px,2.2vw,23px);line-height:1.5;margin-top:20px;max-width:820px}
+.sub{color:var(--muted);margin-top:14px;max-width:760px}
+.cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:30px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 20px;border-radius:999px;font-weight:600;font-size:15px;border:1px solid var(--line);color:var(--ink);background:var(--card)}
+.btn.primary{background:var(--sand);border-color:var(--sand);color:#1b1407}
+.btn:hover{text-decoration:none;filter:brightness(1.08)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:44px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px 22px}
+.stat b{display:block;white-space:nowrap;font-size:34px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.stat span{color:var(--muted);font-size:14px}
+section{padding:56px 0;border-top:1px solid var(--line)}
+section h2{font-size:clamp(26px,3.4vw,36px);letter-spacing:-.02em;line-height:1.15;margin-top:10px}
+section p.intro{color:var(--muted);margin-top:10px;max-width:760px}
+figure{margin-top:26px}
+figure img{width:100%;height:auto;display:block;border-radius:18px;border:1px solid var(--line)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:22px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px}
+.box h3{font-size:17px}
+.box p{color:var(--muted);font-size:15px;margin-top:6px}
+ul.clean{list-style:none;margin-top:14px}
+ul.clean li{padding:8px 0 8px 22px;position:relative;color:var(--ink)}
+ul.clean li:before{content:"";position:absolute;left:0;top:17px;width:8px;height:8px;border-radius:50%;background:var(--teal)}
+footer{padding:48px 0 60px;border-top:1px solid var(--line);color:var(--muted);font-size:15px}
+footer .row{display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px}
+@media (max-width:760px){.stats{grid-template-columns:1fr 1fr}.stat b{font-size:26px}.stat{padding:16px}.two{grid-template-columns:1fr}nav .links a.hide-sm{display:none}header{padding-top:48px}}
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="brand" href="#">Baytak AI<span>بيتك</span></a>
+  <div class="links">
+    <a href="#experience" class="hide-sm">Experience</a>
+    <a href="#architecture" class="hide-sm">Architecture</a>
+    <a href="#quality" class="hide-sm">Quality</a>
+    <a href="https://github.com/athira31-ally/Baytak-AI">GitHub</a>
+  </div>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="eyebrow">Case study · AI / ML Engineering · 2026</div>
+  <h1>Baytak AI<span class="ar">بيتك</span></h1>
+  <p class="lede">A multi-agent property advisor for Dubai — grounded in real Dubai Land Department data that an autonomous agent refreshes every morning.</p>
+  <p class="sub">Ask in English or Arabic. A supervisor routes the request, specialist agents check UAE mortgage rules, the Golden Visa and commutes in parallel, an ML ranker orders the homes — and every number in the answer comes from a tool, never from the model.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/athira31-ally/Baytak-AI">View the code</a>
+    <a class="btn" href="https://baytak-ai.victoriousriver-467d20dd.uaenorth.azurecontainerapps.io">Try the live app ↗</a>
+    <a class="btn" href="https://www.linkedin.com/in/athira-kizhake-kammilli-150116198">LinkedIn</a>
+  </div>
+  <div class="stats">
+    <div class="stat"><b style="color:var(--sand)">8,542</b><span>real homes · sale &amp; rent</span></div>
+    <div class="stat"><b style="color:var(--teal)">22 / 22</b><span>live evaluation cases passed</span></div>
+    <div class="stat"><b>100%</b><span>grounded answers</span></div>
+    <div class="stat"><b>07:00</b><span>daily autonomous data refresh</span></div>
+  </div>
+</div></header>
+
+<section id="experience"><div class="wrap">
+  <div class="eyebrow">01 — The experience</div>
+  <h2>One question. A whole team answers.</h2>
+  <p class="intro">A real answer from the live app. Every price and mortgage figure comes from a tool call, and every home is cited by its Dubai Land Department ID.</p>
+  <figure><img src="images/02-conversation.png" alt="A user question and Baytak AI's grounded answer with the agent trace" loading="lazy"></figure>
+</div></section>
+
+<section id="architecture"><div class="wrap">
+  <div class="eyebrow">02 — Architecture</div>
+  <h2>Two agent systems, one Azure deployment</h2>
+  <p class="intro">A user-facing LangGraph team answers in real time. A Microsoft Foundry agent keeps the data fresh — and the app hot-swaps new homes and re-indexes search without a redeploy.</p>
+  <figure><img src="images/03-architecture.png" alt="Architecture: home-search agent team and the daily Market Data Agent on Azure" loading="lazy"></figure>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">03 — The agent team</div>
+  <h2>Each agent does one job — and only has the tools for it</h2>
+  <figure><img src="images/04-agents.png" alt="Guard, supervisor, search, finance, visa, neighbourhood, writer and grounding agents" loading="lazy"></figure>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">04 — The recommender</div>
+  <h2>Classic ML ranks. The agents explain.</h2>
+  <figure><img src="images/05-recommender.png" alt="Two-stage recommender: Azure AI Search retrieval and LightGBM LambdaRank ranking" loading="lazy"></figure>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">05 — Real data</div>
+  <h2>Every morning at 07:00, nobody touches a thing</h2>
+  <figure><img src="images/06-data.png" alt="Daily sales append and weekly rent refresh by the Market Data Agent" loading="lazy"></figure>
+</div></section>
+
+<section id="quality"><div class="wrap">
+  <div class="eyebrow">06 — LLMOps</div>
+  <h2>Evaluated like software, not demoed like a chatbot</h2>
+  <figure><img src="images/07-quality.png" alt="Evaluation results: 100% task success, groundedness and safety" loading="lazy"></figure>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">07 — Engineering decisions</div>
+  <h2>What I'd tell you in an interview</h2>
+  <div class="two">
+    <div class="box"><h3>Numbers only come from tools</h3><p>The writer sees only tool output, and a grounding check rejects any listing ID no tool returned — measured at 100% by the eval suite.</p></div>
+    <div class="box"><h3>Append for sales, aggregate for rents</h3><p>~1,000 new sales a day are appended and de-duplicated by ID; 12M rent contracts become a weekly rolling median table instead of being stored.</p></div>
+    <div class="box"><h3>Guardrails in code, not prompts</h3><p>The data agent can't publish a batch that failed validation — the tools enforce it, whatever the model decides.</p></div>
+    <div class="box"><h3>It degrades, it doesn't break</h3><p>Model down → deterministic agents. Search down → in-memory retrieval. Bad data → yesterday's homes keep serving.</p></div>
+  </div>
+  <ul class="clean">
+    <li>Honest limits: user behaviour for ranker training is simulated; commute times are estimates; homes are real price evidence, not live adverts.</li>
+  </ul>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">08 — Stack</div>
+  <h2>Built end-to-end, deployed as code</h2>
+  <figure><img src="images/08-stack.png" alt="Tech stack" loading="lazy"></figure>
+</div></section>
+
+<footer><div class="wrap row">
+  <div><b style="color:var(--ink)">Athira Kizhake Kammilli</b> · AI / ML Engineer · Dubai · open to AI Engineer roles in the UAE</div>
+  <div><a href="https://github.com/athira31-ally/Baytak-AI">GitHub</a> · <a href="https://www.linkedin.com/in/athira-kizhake-kammilli-150116198">LinkedIn</a></div>
+</div></footer>
+</body>
+</html>

@@ -1,11 +1,53 @@
 # Baytak AI · بيتك
 
-**An agentic AI property recommender for Dubai, built on Azure.** *Baytak* is Arabic for "your home".
+<p align="center">
+  <img src="docs/images/01-hero.png" alt="Baytak AI — a multi-agent property advisor for Dubai" width="100%">
+</p>
 
-A user asks, in English or Arabic, something like *"Family of 4, budget AED 2.2M, I work in DIFC, want good
-schools and Golden Visa eligibility"*. An AI agent works out what they need and calls tools to search, rank,
-check commute times, mortgage affordability under UAE rules, and Golden Visa eligibility. It then replies with
-a shortlist, every pick explained and every listing ID checked against the tool results.
+<p align="center">
+  <a href="https://athira31-ally.github.io/Baytak-AI/"><b>🌐 Portfolio case study</b></a> &nbsp;·&nbsp;
+  <a href="https://baytak-ai.victoriousriver-467d20dd.uaenorth.azurecontainerapps.io"><b>🚀 Live app</b></a> &nbsp;·&nbsp;
+  <a href="https://www.linkedin.com/in/athira-kizhake-kammilli-150116198"><b>LinkedIn</b></a>
+</p>
+
+<p align="center">
+  <img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-multi--agent-35C2B0">
+  <img alt="Microsoft Foundry" src="https://img.shields.io/badge/Microsoft%20Foundry-Agent%20Service-D9B061">
+  <img alt="Azure AI Search" src="https://img.shields.io/badge/Azure%20AI%20Search-hybrid-6FA8F5">
+  <img alt="LightGBM" src="https://img.shields.io/badge/LightGBM-LambdaRank-E37D6F">
+  <img alt="MCP" src="https://img.shields.io/badge/MCP-server-8A94A6">
+  <img alt="Evals" src="https://img.shields.io/badge/live%20evals-22%2F22-35C2B0">
+</p>
+
+**A multi-agent property advisor for Dubai, grounded in real Dubai Land Department data that an autonomous agent
+refreshes every morning.** *Baytak* is Arabic for "your home".
+
+Ask in English or Arabic, e.g. *"2-bed in Dubai Marina under AED 2.5M, I want the Golden Visa, I work in DIFC"*.
+A supervisor agent routes the request; search, finance, visa and neighbourhood agents work in parallel over an
+ML recommender and UAE-specific tools; a writer answers — and a grounding check guarantees every home it cites
+came from a tool.
+
+| | |
+|---|---|
+| **8,542** real homes (sale + rent) | from 235k DLD sales and 12 months of Ejari rent contracts |
+| **22 / 22** live evaluation cases | 100% task success, groundedness, constraint adherence, routing and safety |
+| **NDCG@10 0.75** vs 0.31 baseline | LightGBM LambdaRank on 19 features (simulated users) |
+| **07:00 daily** | Market Data Agent on Microsoft Foundry appends new deals; rents refresh weekly |
+
+<p align="center"><img src="docs/images/02-conversation.png" alt="A real answer from the live app with the agent trace" width="100%"></p>
+
+### Architecture
+
+<p align="center"><img src="docs/images/03-architecture.png" alt="Two agent systems on one Azure deployment" width="100%"></p>
+
+### Evaluated like software
+
+<p align="center"><img src="docs/images/07-quality.png" alt="Evaluation results" width="100%"></p>
+
+> More visuals (agent team, recommender, data pipeline, stack) are in the
+> [portfolio case study](https://athira31-ally.github.io/Baytak-AI/).
+
+---
 
 Aligned with the **Dubai Universal Blueprint for AI**, the **D33 Economic Agenda** and the
 **UAE National AI Strategy 2031**, which push AI agents into real services such as real estate, one of
@@ -63,10 +105,10 @@ flowchart LR
 
 Regenerated on every `python -m scripts.bootstrap` → `artifacts/metrics.json`, also served at `/metrics/offline`.
 
-> **Be upfront about this in interviews:** listings and user behaviour are *simulated*. Users have hidden
-> preferences (commute sensitivity, school weight, price sensitivity) that generate clicks, and the ranker
-> has to learn them from observable features. The pipeline, evaluation method and serving stack are real.
-> The community price data can be switched to real DLD transactions (see below).
+> **Be upfront about this in interviews:** the *homes and prices are real* (Dubai Land Department sales and
+> Ejari rent contracts), but *user behaviour is simulated*: users with hidden preferences (commute sensitivity,
+> school weight, price sensitivity) generate the clicks the ranker learns from. The pipeline, evaluation method
+> and serving stack are real.
 
 ## What's inside
 
