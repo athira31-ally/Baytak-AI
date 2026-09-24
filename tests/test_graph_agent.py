@@ -97,3 +97,12 @@ def test_chat_endpoint_uses_langgraph(client):
     assert body["engine"] == "langgraph" and body["grounded"]
     assert re.search(r"DHM-\d{5}", body["answer"])
     assert client.get("/health").json()["agent_engine"] == "langgraph"
+
+
+def test_over_constrained_brief_falls_back_to_closest_matches(client):
+    # the model invents constraints nothing can satisfy; search must still come back with options
+    llm = FakeLLM(Brief(purpose="sale", budget_aed=50_000, min_bedrooms=6, property_types=["townhouse"],
+                        preferred_communities=["Palm Jumeirah"]), hallucinate_first=False)
+    llm.bind_tools = lambda tools, tool_choice=None: (_ for _ in ()).throw(RuntimeError("no relax"))  # force rule relax
+    r = _agent(llm).chat(ChatRequest(message="I want a nice home in Dubai"))
+    assert r.recommendations and [t.tool for t in r.tool_trace].count("search_homes") == 3

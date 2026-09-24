@@ -215,8 +215,16 @@ def search(state: State, config) -> dict:
             args = _llm_step(ctx, "search", relax_llm, relax_rules)
             args.setdefault("purpose", q.purpose)
             res = ctx.run_tool("search_homes", args)
+        if not res.get("results"):
+            # last resort: only what the user certainly said (purpose + their words). The writer is told
+            # these are the closest options, not exact matches.
+            res = ctx.run_tool("search_homes", {"purpose": q.purpose, "free_text": state["message"]})
+            if res.get("results"):
+                res["closest_matches_only"] = True
     shortlist = res.get("results", [])[:5]
-    return {"shortlist": shortlist, "agents": ["search"]}
+    notes = [{"agent": "search", "text": "No homes matched every requirement; these are the closest options "
+                                         "- say so and suggest what to relax."}] if res.get("closest_matches_only") else []
+    return {"shortlist": shortlist, "findings": notes, "agents": ["search"]}
 
 
 def route_after_search(state: State):
