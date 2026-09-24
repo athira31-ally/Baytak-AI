@@ -128,7 +128,8 @@ $("#f").onsubmit = async e => {
   const out = $("#out"); out.innerHTML = "";
   const a = document.createElement("div"); a.className = "answer"; a.dir = "auto"; a.textContent = d.answer; out.append(a);
   const m = document.createElement("div"); m.className = "meta";
-  m.innerHTML = `${d.mode} &middot; ${d.tool_trace.length} tool calls &middot; ${d.latency_ms} ms &middot; ` +
+  const team = (d.agents || []).filter((x, i, a) => a.indexOf(x) === i).join(" → ");
+  m.innerHTML = `${d.engine || "classic"} &middot; ${d.mode} &middot; ${team ? team + " &middot; " : ""}${d.tool_trace.length} tool calls &middot; ${d.latency_ms} ms &middot; ` +
     (d.grounded ? "grounded" : `<span class="flag">ungrounded IDs: ${d.ungrounded_ids.join(", ")}</span>`);
   out.append(m);
   const g = document.createElement("div"); g.className = "grid"; out.append(g);
@@ -144,7 +145,7 @@ $("#f").onsubmit = async e => {
     g.append(c);
   });
   const det = document.createElement("details");
-  det.innerHTML = `<summary>Agent trace</summary><pre>${JSON.stringify({ query: d.query, tools: d.tool_trace }, null, 2)
+  det.innerHTML = `<summary>Agent trace</summary><pre>${JSON.stringify({ agents: d.agents, query: d.query, tools: d.tool_trace }, null, 2)
     .replace(/</g, "&lt;")}</pre>`;
   out.append(det);
 };

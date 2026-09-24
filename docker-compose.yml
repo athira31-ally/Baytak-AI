@@ -1,0 +1,38 @@
+# Run Baytak AI fully on-prem with an open-source model (no Azure, no data leaves the machine).
+#
+#   docker compose up -d            # first start pulls the model (~2-5 GB)
+#   open http://localhost:8000      # /health shows  "llm": "open-source:qwen2.5:3b-instruct"
+#
+# Swap OLLAMA_MODEL for a bigger model on a GPU box (qwen2.5:7b-instruct, llama3.1:8b), or point
+# LLM_BASE_URL at a vLLM / NVIDIA NIM server instead - anything that speaks the OpenAI API.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes: [ollama:/root/.ollama]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      retries: 30
+
+  ollama-pull:                       # one-off: download the model into the shared volume
+    image: ollama/ollama:latest
+    depends_on:
+      ollama: {condition: service_healthy}
+    environment: {OLLAMA_HOST: "http://ollama:11434"}
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen2.5:3b-instruct}"]
+    volumes: [ollama:/root/.ollama]
+
+  app:
+    build: .
+    ports: ["8000:8000"]
+    depends_on:
+      ollama-pull: {condition: service_completed_successfully}
+    environment:
+      LLM_PROVIDER: openai_compatible
+      LLM_BASE_URL: http://ollama:11434/v1
+      LLM_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b-instruct}
+      AGENT_ENGINE: langgraph
+
+volumes:
+  ollama: {}

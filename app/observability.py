@@ -20,3 +20,23 @@ def setup(settings: Settings) -> None:
 
 # Structured events land in App Insights `traces` with customDimensions
 events = logging.getLogger("homematch")
+
+
+# ------------------------------------------------------------------ tracing
+# OpenTelemetry spans for every agent step and tool call. With App Insights configured they show up
+# as an end-to-end transaction (request -> supervisor -> specialists -> tools -> writer) in
+# Application Insights > Transaction search; without it they are no-ops.
+from contextlib import contextmanager  # noqa: E402
+
+from opentelemetry import trace  # noqa: E402
+
+tracer = trace.get_tracer("baytak.agents")
+
+
+@contextmanager
+def span(name: str, **attributes):
+    with tracer.start_as_current_span(name) as s:
+        for k, v in attributes.items():
+            if v is not None:
+                s.set_attribute(f"baytak.{k}", v if isinstance(v, (str, int, float, bool)) else str(v))
+        yield s

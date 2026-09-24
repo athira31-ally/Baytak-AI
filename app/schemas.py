@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -85,7 +86,10 @@ class ChatResponse(BaseModel):
     tool_trace: list[ToolCallTrace]
     grounded: bool
     ungrounded_ids: list[str] = []
-    mode: Literal["azure-openai", "offline"]
+    mode: str                                  # "azure-openai", "open-source:<model>" or "offline"
+    engine: str = "classic"                    # "langgraph" (multi-agent) or "classic" (single loop)
+    agents: list[str] = []                     # which agents ran, in order (LangGraph engine)
+    blocked: bool = False                      # True if the safety guard refused the request
     latency_ms: float
 
 
@@ -96,3 +100,8 @@ class FeedbackEvent(BaseModel):
     variant: Literal["ranker", "baseline"] | None = None
     position: int | None = None
     source: str | None = None
+
+
+# Listing IDs: synthetic demo homes (DHM-01234) and real DLD homes (DLD-55E737F2).
+# The grounding checks use this to verify that every ID in an answer came from a tool.
+LISTING_ID_RE = re.compile(r"\b(?:DHM-\d{5}|DLD-[0-9A-F]{8})\b")

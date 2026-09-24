@@ -7,3 +7,6 @@ artifacts/
 venv/
 .DS_Store
 data/raw/
+
+# local evaluation runs
+evals/results/

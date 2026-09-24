@@ -3,10 +3,12 @@
 //   az deployment group create -g rg-dubai-home-match -f infra/main.bicep -p infra/main.bicepparam
 //
 // What it deploys (names default to the resources you already have, so re-deploying adopts them):
-//   AI        Microsoft Foundry resource + project + gpt-5-mini deployment. Serves BOTH agents:
-//             - Home-search agent (web app): Azure OpenAI function calling, 5 tools, in app code
+//   AI        Microsoft Foundry resource + project + gpt-5-mini deployment. Serves BOTH agent systems:
+//             - Home-search team (web app): LangGraph supervisor + search/finance/visa/neighbourhood agents
 //             - Market Data Agent (daily job): Foundry Agent Service agent, 7 function tools
 //   Data      Cosmos DB serverless: `feedback`, `market_tx` (per-deal TTL), `agent_memory`
+//   Search    Azure AI Search (Free) - hybrid retrieval; the web app publishes the versioned homes index itself
+//   Safety    Prompt Shields via the Foundry resource (no extra resource)
 //   Monitor   Log Analytics + Application Insights
 //   Compute   Container App (web) + scheduled Container Apps Job (daily agent, 07:00 Dubai)
 //   Access    "Foundry User" role for the job's managed identity on the Foundry project
@@ -38,8 +40,14 @@ param image string = 'ghcr.io/athira31-ally/baytak-ai:latest'
 param containerAppsEnvironmentId string = ''
 @description('UTC cron. 03:00 UTC = 07:00 Dubai.')
 param cronExpression string = '0 3 * * *'
-@description('Comma-separated data.dubai CSV links for the daily agent (optional).')
+@description('Comma-separated data.dubai CSV links for the daily agent (optional; normally discovered automatically).')
 param dldFileUrls string = ''
+@description('Azure AI Search tier: free (one per subscription), basic, standard.')
+param searchSku string = 'free'
+param searchLocation string = location
+@description('Optional bearer key for the /mcp endpoint. Empty = open (read-only tools).')
+@secure()
+param mcpApiKey string = ''
 
 var foundryUserRoleId = '53ca6127-db72-4b80-b1b0-d745d6d5456d' // "Foundry User"
 
@@ -157,6 +165,18 @@ resource agentMemory 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/contain
   }
 }
 
+// --------------------------------------------------------------- AI Search
+resource search 'Microsoft.Search/searchServices@2023-11-01' = {
+  name: 'srch-dhm-${suffix}'
+  location: searchLocation
+  sku: { name: searchSku }
+  properties: {
+    replicaCount: 1
+    partitionCount: 1
+    hostingMode: 'default'
+  }
+}
+
 // ------------------------------------------------------------ Container Apps
 resource newEnv 'Microsoft.App/managedEnvironments@2024-03-01' = if (empty(containerAppsEnvironmentId)) {
   name: 'cae-dhm-${suffix}'
@@ -191,8 +211,26 @@ var commonEnv = [
   { name: 'HOMES_SYNC_SECONDS', value: '300' }
 ]
 
-// Web app: UI + API + home-search agent (search_homes, check_affordability, check_golden_visa,
-// estimate_commute, community_profile). Hot-swaps homes the Market Data Agent publishes.
+var webSecrets = concat(commonSecrets, [
+  { name: 'search-key', value: search.listAdminKeys().primaryKey }
+], empty(mcpApiKey) ? [] : [
+  { name: 'mcp-key', value: mcpApiKey }
+])
+
+var webEnv = concat(commonEnv, [
+  { name: 'AGENT_ENGINE', value: 'langgraph' }
+  { name: 'AZURE_OPENAI_CHAT_MODEL', value: modelName }
+  { name: 'AZURE_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
+  { name: 'AZURE_SEARCH_API_KEY', secretRef: 'search-key' }
+  { name: 'CONTENT_SAFETY_ENDPOINT', value: 'https://${foundryName}.cognitiveservices.azure.com' }
+  { name: 'CONTENT_SAFETY_KEY', secretRef: 'aoai-key' }
+], empty(mcpApiKey) ? [] : [
+  { name: 'MCP_API_KEY', secretRef: 'mcp-key' }
+])
+
+// Web app: UI + API + LangGraph home-search team (supervisor -> search -> finance | visa | neighbourhood
+// -> writer -> grounding) + MCP server at /mcp/. Hot-swaps homes the Market Data Agent publishes and
+// re-publishes them to Azure AI Search.
 resource web 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
@@ -205,7 +243,7 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8000
         transport: 'auto'
       }
-      secrets: commonSecrets
+      secrets: webSecrets
     }
     template: {
       containers: [
@@ -213,7 +251,7 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
           name: appName
           image: image
           resources: { cpu: json('0.5'), memory: '1Gi' }
-          env: commonEnv
+          env: webEnv
           probes: [
             {
               type: 'Readiness'
@@ -282,3 +320,5 @@ output webUrl string = 'https://${web.properties.configuration.ingress.fqdn}'
 output foundryProjectEndpoint string = project.properties.endpoints['AI Foundry API']
 output foundryPortal string = 'https://ai.azure.com'
 output cosmosEndpoint string = cosmos.properties.documentEndpoint
+output searchEndpoint string = 'https://${search.name}.search.windows.net'
+output mcpEndpoint string = 'https://${web.properties.configuration.ingress.fqdn}/mcp/'

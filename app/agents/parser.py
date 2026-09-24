@@ -44,7 +44,11 @@ def parse_query(text: str) -> UserQuery:
         beds = int(m.group(1))
     elif m := re.search(r"family of (\d)", t):
         beds = max(2, int(m.group(1)) - 1)
-    elif "studio" in t:
+    elif m := re.search(r"غرفتين|غرفتان|(ثلاث|ثلاثة|أربع|أربعة|خمس|خمسة)\s*غرف|غرفة\s*(?:نوم\s*)?واحدة|غرفة نوم", t):
+        # Arabic: dual form (غرفتين = 2 rooms), number words + غرف, or a single bedroom
+        words = {"ثلاث": 3, "ثلاثة": 3, "أربع": 4, "أربعة": 4, "خمس": 5, "خمسة": 5}
+        beds = 2 if m.group(0).startswith("غرفت") else words.get(m.group(1) or "", 1)
+    elif "studio" in t or "استوديو" in t:
         beds = 0
     elif re.search(r"kid|child|family|عائلة|أطفال", t):
         beds = 2

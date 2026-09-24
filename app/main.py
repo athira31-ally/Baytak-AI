@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import observability
+from app import mcp_server, observability
 from app.agents.orchestrator import Agent
 from app.agents.tools import Toolbox
 from app.config import ROOT, get_settings
@@ -21,6 +21,14 @@ from app.storage.feedback import get_store
 
 settings = get_settings()
 observability.setup(settings)
+
+
+def make_agent(rec, s):
+    """Home-search agent: LangGraph multi-agent team (default) or the classic single tool loop."""
+    if s.agent_engine == "langgraph":
+        from app.agents.graph import GraphAgent
+        return GraphAgent(rec, s)
+    return Agent(rec, s)
 state: dict = {}
 
 
@@ -28,12 +36,16 @@ state: dict = {}
 async def lifespan(_: FastAPI):
     store = get_store(settings)
     rec = Recommender(settings, store)
-    state.update(store=store, rec=rec, agent=Agent(rec, settings))
+    state.update(store=store, rec=rec, agent=make_agent(rec, settings))
     # The daily Market Data Agent publishes homes to Cosmos + Redis; this hot-swaps them in.
     from app.data.watcher import StoreWatcher
     state["live"] = StoreWatcher(settings, rec)
     state["live"].start()
-    yield
+    # MCP server shares the live recommender / agent / market store with the web app
+    mcp_server.bind(lambda: state.get("rec"), settings, get_agent=lambda: state.get("agent"),
+                    get_store=lambda: state["live"].store if "live" in state else None)
+    async with mcp_server.mcp.session_manager.run():
+        yield
     if "live" in state:
         state["live"].stop()
     state.clear()
@@ -42,6 +54,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Baytak AI", version="0.1.0", lifespan=lifespan,
               description="Agentic property recommender for Dubai - Azure OpenAI + AI Search + LightGBM")
 app.mount("/static", StaticFiles(directory=ROOT / "app" / "static"), name="static")
+app.mount("/mcp", mcp_server.http_app(settings.mcp_api_key))   # Model Context Protocol (streamable HTTP)
 
 
 def _log_impressions(session_id: str, variant: str, recs: list[Recommendation]) -> None:
@@ -58,8 +71,10 @@ def index():
 @app.get("/health")
 def health():
     return {"status": "ok", "listings": len(state["rec"].listings), "ranker_loaded": state["rec"].ranker.ready,
-            "llm": "azure-openai" if settings.use_azure_openai else "offline",
-            "retrieval": "azure-ai-search" if settings.use_azure_search else "local",
+            "llm": settings.llm_label if settings.use_llm else "offline",
+            "agent_engine": settings.agent_engine,
+            "retrieval": {**state["rec"].search_status,
+                          "last_query": getattr(state["rec"].retriever, "last_backend", "local")},
             "store": "cosmos" if settings.use_cosmos else "sqlite", "data": data_status()}
 
 

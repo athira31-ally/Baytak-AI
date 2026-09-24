@@ -34,6 +34,12 @@ class LocalEmbedder:
         self.model.fit(texts)
         joblib.dump(self.model, self.path)
 
+    @property
+    def signature(self) -> str:
+        """Identifies the exact fitted model, so index vectors and query vectors always match."""
+        import hashlib
+        return self.name + ":" + (hashlib.md5(self.path.read_bytes()).hexdigest()[:10] if self.path.exists() else "unfitted")
+
     def embed(self, texts: list[str]) -> np.ndarray:
         if self.model is None:
             raise RuntimeError("Local embedder not fitted. Run `python -m scripts.bootstrap`.")
@@ -47,6 +53,10 @@ class AzureOpenAIEmbedder:
         from app.agents.llm import azure_openai_client
         self.client = azure_openai_client(settings)
         self.deployment = settings.azure_openai_embedding_deployment
+
+    @property
+    def signature(self) -> str:
+        return f"{self.name}:{self.deployment}"
 
     def fit(self, texts: list[str], dim: int = 0) -> None:  # nothing to fit
         return None

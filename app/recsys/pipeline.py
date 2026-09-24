@@ -47,10 +47,11 @@ class Recommender:
         if str(emb["embedder"]) != self.embedder.name:
             raise RuntimeError(f"Listing vectors were built with '{emb['embedder']}' but the app is configured for "
                                f"'{self.embedder.name}'. Re-run `python -m scripts.bootstrap`.")
+        # In-memory retrieval always exists: it serves until Azure AI Search is ready and is its fallback.
+        self.retriever = LocalRetriever(self.listings, emb["vectors"], self.embedder)
+        self.search_status: dict = {"backend": "local"}
         if settings.use_azure_search:
-            self.retriever = AzureSearchRetriever(settings, self.listings, self.embedder)
-        else:
-            self.retriever = LocalRetriever(self.listings, emb["vectors"], self.embedder)
+            self._attach_search_async(self.listings, emb["vectors"], self.retriever)
         self.ranker = LTRRanker(settings.data_dir / "ranker.txt")
         self.bandit = CommunityThompsonBandit()
         self.by_id = self.listings.set_index("listing_id", drop=False)
@@ -60,14 +61,35 @@ class Recommender:
         """Hot-swap the catalogue (live data refresh). The ranker scores features, not item IDs,
         so it works on new homes without retraining."""
         listings = listings.reset_index(drop=True)
-        if self.s.use_azure_search:
-            log.warning("Live refresh with Azure AI Search needs a re-index; keeping the indexed catalogue")
-            return
         vectors = self.embedder.embed(listings["description"].tolist())
         retriever = LocalRetriever(listings, vectors, self.embedder)
         by_id = listings.set_index("listing_id", drop=False)
         # attribute assignment is atomic: in-flight requests finish on the old catalogue
         self.listings, self.retriever, self.by_id = listings, retriever, by_id
+        if self.s.use_azure_search:          # re-index the new catalogue, then switch to it
+            self._attach_search_async(listings, vectors, retriever)
+
+    def attach_search(self, listings: pd.DataFrame, vectors, local: LocalRetriever, index_client=None,
+                      search_client=None) -> None:
+        """Publish this catalogue to Azure AI Search and switch retrieval to it (local stays as fallback)."""
+        from app.recsys.search_index import catalogue_version, publish
+        version = catalogue_version(listings, self.embedder.signature)
+        try:
+            res = publish(self.s, listings, vectors, version, index_client, search_client)
+        except Exception as e:
+            log.warning("Azure AI Search publish failed, staying on in-memory retrieval: %s", e)
+            self.search_status = {"backend": "local", "error": str(e)[:200]}
+            return
+        if self.listings is not listings:        # a newer catalogue arrived meanwhile; it will attach itself
+            return
+        self.retriever = AzureSearchRetriever(self.s, listings, self.embedder, version, fallback=local,
+                                              client=search_client)
+        self.search_status = {"backend": "azure-ai-search", "index": self.s.azure_search_index, **res}
+
+    def _attach_search_async(self, listings, vectors, local) -> None:
+        import threading
+        threading.Thread(target=self.attach_search, args=(listings, vectors, local), daemon=True,
+                         name="search-publish").start()
 
     def refresh_bandit(self) -> None:
         try:

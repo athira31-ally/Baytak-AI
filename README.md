@@ -11,23 +11,47 @@ Aligned with the **Dubai Universal Blueprint for AI**, the **D33 Economic Agenda
 **UAE National AI Strategy 2031**, which push AI agents into real services such as real estate, one of
 Dubai's biggest sectors.
 
+Two agent systems share one Azure deployment:
+
+1. **Home-search team (user-facing)** - a **LangGraph** multi-agent graph. A supervisor reads the request and routes
+   it; a search agent drives the ML recommender; finance, visa and neighbourhood specialists run **in parallel**;
+   a writer composes the answer; a grounding check forces a rewrite if any listing ID didn't come from a tool.
+2. **Market Data Agent (daily, 07:00 Dubai)** - runs on **Microsoft Foundry Agent Service**. It appends only the
+   new Dubai Land Department deals to Cosmos DB, validates them, rebuilds the homes and republishes them;
+   the web app hot-swaps them in and re-indexes **Azure AI Search**, with no redeploy.
+
 ```mermaid
 flowchart LR
-    U[User: EN / AR] --> A[Agent<br/>Azure OpenAI function calling]
-    A -->|search_homes| R
-    A -->|check_affordability| F[UAE mortgage rules<br/>LTV, DBR, DLD 4%]
-    A -->|check_golden_visa| G[AED 2M threshold]
-    A -->|estimate_commute / community_profile| D[Dubai reference data<br/>DLD / RERA / KHDA]
-    subgraph R[Recommender]
-      R1[Stage 1: Retrieval<br/>filters + vectors<br/>Azure AI Search] --> R2[Stage 2: LightGBM<br/>LambdaRank]
-      R2 --> R3[Diversity re-rank<br/>+ Thompson-sampling<br/>exploration slot]
+    U[User EN/AR<br/>or any MCP client] --> GU[guard<br/>Prompt Shields]
+    GU --> SV[supervisor]
+    SV --> SE[search agent]
+    SE -->|search_homes| R
+    SE --> FI[finance agent]
+    SE --> VI[visa agent]
+    SE --> NB[neighbourhood agent]
+    FI & VI & NB --> WR[writer] --> GR{grounding<br/>IDs from tools?}
+    GR -- no, rewrite --> WR
+    GR -- yes --> U
+    subgraph R[ML recommender]
+      R1[Retrieval: Azure AI Search<br/>hybrid BM25 + vector + OData filters] --> R2[LightGBM LambdaRank<br/>19 features] --> R3[diversity + Thompson<br/>sampling slot]
     end
-    A --> V[Grounding check<br/>cited IDs must come from tools]
-    V --> U
-    U -. click / save / dismiss .-> C[(Cosmos DB<br/>feedback)]
-    C -.-> AB[Bayesian A/B read-out<br/>+ bandit posteriors]
-    A -.-> M[App Insights<br/>latency, tools, grounding]
+    subgraph D[Daily data pipeline]
+      J[Container Apps Job 07:00] --> FA[Market Data Agent<br/>Foundry Agent Service, 7 tools]
+      FA --> C[(Cosmos DB<br/>deals + agent memory)]
+    end
+    C -. hot-swap + re-index .-> R
 ```
+
+| Capability | Technology | Where |
+|---|---|---|
+| Multi-agent orchestration | LangGraph (supervisor, parallel fan-out with `Send`, conditional retry loop) | `app/agents/graph.py` |
+| Managed agent | Microsoft Foundry Agent Service (versioned agent, conversations, function tools) | `app/data/foundry_agent.py` |
+| Tool protocol | MCP server (streamable HTTP at `/mcp/`, stdio) - usable from Claude, Copilot, Cursor | `app/mcp_server.py` |
+| Retrieval | Azure AI Search hybrid + filters, versioned zero-downtime index, local fallback | `app/recsys/search_index.py`, `retrieval.py` |
+| Open-source / on-prem LLM | Any OpenAI-compatible server (Ollama, vLLM, NIM), e.g. Qwen 2.5 - `docker compose up` | `app/agents/llm.py`, `docker-compose.yml` |
+| Evaluation (LLMOps) | 22-case eval set: task success, groundedness, constraint adherence, routing, tool use, safety, latency; LLM-as-judge; CI gate | `app/evals.py`, `scripts/run_evals.py` |
+| Safety | Azure AI Content Safety Prompt Shields + local injection checks; grounding check | `app/safety.py` |
+| Observability | OpenTelemetry spans per agent and tool, exported to Application Insights | `app/observability.py` |
 
 ## Results (offline, held-out simulated users)
 
@@ -48,7 +72,7 @@ Regenerated on every `python -m scripts.bootstrap` → `artifacts/metrics.json`,
 
 | Area | What it shows | Where |
 |---|---|---|
-| Agentic AI | Azure OpenAI tool-calling loop, max-steps guard, graceful offline fallback | `app/agents/orchestrator.py` |
+| Classic agent (AGENT_ENGINE=classic) | Single Azure OpenAI tool-calling loop, max-steps guard, offline fallback | `app/agents/orchestrator.py` |
 | Guardrails | Grounding check flags any listing ID the LLM didn't get from a tool | `orchestrator.py`, `tests/test_agent_loop.py` |
 | Retrieval | Hard filters + semantic vectors, progressive relaxation; Azure AI Search hybrid variant | `app/recsys/retrieval.py` |
 | Ranking | 19 features (commute, schools, budget fit, deal score, Golden Visa match...), LambdaRank | `app/recsys/features.py`, `ranker.py` |
@@ -56,6 +80,34 @@ Regenerated on every `python -m scripts.bootstrap` → `artifacts/metrics.json`,
 | Experimentation | Sticky hash bucketing (80/20), Bayesian A/B read-out: P(ranker better), lift CI | `app/recsys/pipeline.py` |
 | UAE domain | LTV tiers, 50% debt-burden ratio cap, 4% DLD fee, Golden Visa, annual rents, Arabic | `app/agents/tools.py`, `parser.py` |
 | MLOps | Docker, Azure Container Apps (UAE North), Cosmos DB, App Insights, CI | `Dockerfile`, `infra/deploy.sh` |
+
+## Evaluate the agents
+
+```bash
+python -m scripts.run_evals --offline          # deterministic agents (what CI gates on)
+python -m scripts.run_evals --judge            # with your LLM + LLM-as-judge scores
+python -m scripts.run_evals --url https://<app> --no-gate      # the deployed app
+python -m scripts.run_evals --engine classic   # compare with the single-loop agent
+```
+
+## Run it on an open-source model (on-prem)
+
+```bash
+docker compose up -d        # Ollama + Qwen 2.5 3B + Baytak AI, nothing leaves the machine
+# or point at any OpenAI-compatible server:
+LLM_PROVIDER=openai_compatible LLM_BASE_URL=http://localhost:11434/v1 LLM_MODEL=qwen2.5:7b-instruct \
+  python -m uvicorn app.main:app
+```
+
+## Use it from any MCP client
+
+Claude Desktop / Claude Code / VS Code (Copilot agent mode) / Cursor - add a server:
+
+```json
+{"mcpServers": {"baytak": {"type": "http", "url": "https://<your-app>/mcp/"}}}
+```
+
+or run it locally over stdio: `python -m app.mcp_server`.
 
 ## Run it locally (5 minutes, no Azure needed)
 

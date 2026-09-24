@@ -300,9 +300,9 @@ class MarketDataAgent:
         self.tools = tools or DataTools(settings)
         if client is False:                       # subclass supplies its own client
             client = None
-        elif client is None and settings.use_azure_openai:
-            from app.agents.llm import azure_openai_client
-            client = azure_openai_client(settings)
+        elif client is None and settings.use_llm:
+            from app.agents.llm import llm_client
+            client = llm_client(settings)
         self.client = client
         self.trace: list[dict] = []
 
@@ -341,7 +341,7 @@ class MarketDataAgent:
         msgs = [{"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": f"Run today's refresh. Today is {pd.Timestamp.today().date()}."}]
         for _ in range(12):
-            kw = dict(model=self.s.azure_openai_chat_deployment, messages=msgs, tools=TOOL_SPECS, tool_choice="auto")
+            kw = dict(model=self.s.chat_model_name, messages=msgs, tools=TOOL_SPECS, tool_choice="auto")
             try:
                 resp = self.client.chat.completions.create(reasoning_effort=self.s.llm_reasoning_effort, **kw)
             except Exception as e:

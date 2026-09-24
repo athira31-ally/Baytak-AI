@@ -14,22 +14,22 @@ import re
 import time
 import uuid
 
-from app.agents.llm import azure_openai_client
+from app.agents.llm import llm_client
 from app.agents.parser import is_arabic, parse_query
 from app.agents.tools import TOOL_SPECS, Toolbox
 from app.config import Settings
 from app.recsys.pipeline import Recommender
-from app.schemas import ChatRequest, ChatResponse, ToolCallTrace
+from app.schemas import LISTING_ID_RE, ChatRequest, ChatResponse, ToolCallTrace
 
 log = logging.getLogger(__name__)
 MAX_STEPS = 6
-ID_RE = re.compile(r"DHM-\d{5}")
+ID_RE = LISTING_ID_RE
 
 SYSTEM_PROMPT = """You are Baytak AI (Arabic for 'your home'), a property advisor for people buying or renting in Dubai.
 
 Rules:
 - ALWAYS call search_homes before recommending any property. Recommend only listings returned by tools.
-- Cite every listing by its ID in square brackets, e.g. [DHM-01234].
+- Cite every listing by its ID in square brackets, e.g. [DLD-XXXXXXXX].
 - Take all numbers (prices, commute times, fees, installments) from tool results. Never invent figures.
 - If the user gives a monthly income and is buying, call check_affordability for your top pick.
 - If the user mentions the Golden Visa or residency, call check_golden_visa.
@@ -54,7 +54,7 @@ class Agent:
     def __init__(self, recommender: Recommender, settings: Settings):
         self.rec = recommender
         self.s = settings
-        self.client = azure_openai_client(settings) if settings.use_azure_openai else None
+        self.client = llm_client(settings)
         self.temperature_ok = True  # reasoning models (gpt-5*, o-series) reject a custom temperature
         self.reasoning_effort = settings.llm_reasoning_effort or None
 
@@ -62,7 +62,7 @@ class Agent:
         """Call the chat model. Classic models get temperature=0.2. Reasoning models
         (gpt-5*, o-series) reject that, so we switch to a low reasoning effort instead,
         which also keeps latency down (the default 'medium' can take 30s+ per turn)."""
-        kw.setdefault("model", self.s.azure_openai_chat_deployment)
+        kw.setdefault("model", self.s.chat_model_name)
         if self.temperature_ok:
             try:
                 return self.client.chat.completions.create(temperature=0.2, **kw)
@@ -101,7 +101,7 @@ class Agent:
         if self.client is not None:
             try:
                 answer = self._llm_loop(req, run_tool)
-                mode = "azure-openai"
+                mode = self.s.llm_label
             except Exception as e:  # degrade gracefully, never 500 the user
                 log.exception("LLM loop failed, falling back to offline planner: %s", e)
         if answer is None:

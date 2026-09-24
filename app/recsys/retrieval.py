@@ -80,44 +80,63 @@ class LocalRetriever:
 
 
 class AzureSearchRetriever:
-    """Same contract as LocalRetriever, backed by Azure AI Search.
-    Index is built by scripts/index_azure_search.py."""
+    """Same contract as LocalRetriever, backed by Azure AI Search: OData filters + hybrid query
+    (BM25 on the description + HNSW vector search, fused with RRF), optionally the semantic ranker.
+    Queries only its own catalogue `version` (see search_index.py). Any error or empty result falls
+    back to the in-memory retriever, so search never goes down with the service."""
 
-    def __init__(self, settings: Settings, listings: pd.DataFrame, embedder):
-        from azure.core.credentials import AzureKeyCredential
-        from azure.identity import DefaultAzureCredential
-        from azure.search.documents import SearchClient
-
-        cred = AzureKeyCredential(settings.azure_search_api_key) if settings.azure_search_api_key else DefaultAzureCredential()
-        self.client = SearchClient(settings.azure_search_endpoint, settings.azure_search_index, cred)
+    def __init__(self, settings: Settings, listings: pd.DataFrame, embedder, version: str,
+                 fallback: LocalRetriever | None = None, client=None):
+        if client is None:
+            from app.recsys.search_index import clients
+            client = clients(settings)[1]
+        self.client, self.s, self.version = client, settings, version
         self.df = listings.set_index("listing_id", drop=False)
-        self.embedder = embedder
+        self.embedder, self.fallback = embedder, fallback
+        self.last_backend = "azure-ai-search"
 
-    @staticmethod
-    def odata_filter(q: UserQuery, budget_hi: float = 1.10) -> str:
-        f = [f"purpose eq '{q.purpose}'", f"bedrooms ge {q.min_bedrooms}"]
+    def odata_filter(self, q: UserQuery, budget_hi: float = 1.10, use_communities: bool = True) -> str:
+        f = [f"version eq '{self.version}'", f"purpose eq '{q.purpose}'", f"bedrooms ge {q.min_bedrooms}"]
         if q.min_bedrooms > 0:
             f.append(f"bedrooms le {q.min_bedrooms + 2}")
         if q.budget_aed:
             f.append(f"{price_col(q)} le {q.budget_aed * budget_hi:.0f} and {price_col(q)} ge {q.budget_aed * 0.35:.0f}")
         if q.property_types:
             f.append("search.in(property_type, '" + ",".join(q.property_types) + "', ',')")
+        if use_communities and q.preferred_communities:
+            names = [c.name.replace("'", "''") for c in map(resolve_community, q.preferred_communities) if c]
+            if names:
+                f.append("search.in(community, '" + "|".join(names) + "', '|')")
         if not q.off_plan_ok:
             f.append("off_plan eq false")
         return " and ".join(f)
 
-    def retrieve(self, q: UserQuery, k: int = 200) -> pd.DataFrame:
+    def _search(self, q: UserQuery, k: int, flt: str, qv: list[float]):
         from azure.search.documents.models import VectorizedQuery
+        kw = dict(search_text=query_text(q), filter=flt, top=k, select=["listing_id"],
+                  vector_queries=[VectorizedQuery(vector=qv, k_nearest_neighbors=k, fields="embedding")])
+        if self.s.azure_search_semantic:
+            kw.update(query_type="semantic", semantic_configuration_name="homes")
+        return [(r["listing_id"], r["@search.score"]) for r in self.client.search(**kw)]
 
-        qv = self.embedder.embed([query_text(q)])[0].tolist()
-        results = self.client.search(
-            search_text=query_text(q),                       # hybrid: BM25 + vector
-            vector_queries=[VectorizedQuery(vector=qv, k_nearest_neighbors=k, fields="embedding")],
-            filter=self.odata_filter(q), top=k, select=["listing_id"],
-        )
-        hits = [(r["listing_id"], r["@search.score"]) for r in results]
-        if not hits:
-            return self.df.iloc[0:0].assign(retrieval_score=[])
+    def retrieve(self, q: UserQuery, k: int = 200) -> pd.DataFrame:
+        try:
+            qv = self.embedder.embed([query_text(q)])[0].tolist()
+            hits = []
+            for budget_hi, use_comm in [(1.10, True), (1.10, False), (1.30, False)]:   # same relaxation as local
+                hits = self._search(q, k, self.odata_filter(q, budget_hi, use_comm), qv)
+                if len(hits) >= 20:
+                    break
+            hits = [h for h in hits if h[0] in self.df.index]
+            if not hits:
+                raise LookupError("no hits")
+        except Exception as e:
+            if self.fallback is None:
+                raise
+            log.warning("Azure AI Search retrieval failed (%s); using in-memory retrieval", e)
+            self.last_backend = "local-fallback"
+            return self.fallback.retrieve(q, k)
+        self.last_backend = "azure-ai-search"
         cand = self.df.loc[[h[0] for h in hits]].copy()
         scores = np.array([h[1] for h in hits], dtype=float)
         cand["semantic_sim"] = scores / (scores.max() + 1e-9)   # RRF scores -> [0,1]
