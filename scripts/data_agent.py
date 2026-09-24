@@ -36,7 +36,7 @@ def main() -> None:
         print(f"foundry agent={f['agent']} version={f['version']} conversation={f['conversation_id']}")
     for t in result["trace"]:
         print(f"  {t['tool']:<16} {t['seconds']:>6}s  {t['result'][:150]}")
-    sys.exit(0 if result["outcome"] in ("APPENDED", "NO NEW DATA") else 1)
+    sys.exit(0 if result["outcome"] in ("APPENDED", "REFRESHED", "NO NEW DATA") else 1)
 
 
 if __name__ == "__main__":

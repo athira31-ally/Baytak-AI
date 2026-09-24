@@ -57,6 +57,7 @@ CANDIDATES = {
     "rent": ["annual_amount", "annual_rent", "contract_amount"],
     "metro": ["nearest_metro_en", "nearest_metro"],
     "parking": ["has_parking", "parking"],
+    "units": ["no_of_prop", "number_of_properties", "no_of_properties"],   # Ejari: units in one contract
 }
 
 # DLD's official area names -> marketing community names. Master-project names usually match
@@ -191,6 +192,9 @@ def prepare(df: pd.DataFrame, kind: str, months: int, name: str = "data", verbos
         out = out[out["group"].str.contains("sale|sell", case=False)]
     if cols["usage"]:
         out = out[out["usage"].str.contains("resid", case=False) | out["usage"].isin(["nan", "None"])]
+    if kind == "rent" and cols["units"]:
+        # bulk leases (one contract for many units) would distort per-home rents
+        out = out[pd.to_numeric(get("units").reindex(out.index), errors="coerce").fillna(1) <= 1]
     out = out.dropna(subset=["date", "type", "rooms", "size_sqft", "value"])
     lo = 200_000 if kind == "sale" else 15_000
     out = out[(out["value"] >= lo) & (out["size_sqft"].between(250, 20_000))]
@@ -339,13 +343,50 @@ def _read_since(sources, since, chunksize, verbose) -> pd.DataFrame:
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
+RENT_KEEP = ["community", "building", "project", "master", "type", "rooms", "size_sqft", "value", "date",
+             "off_plan", "metro", "parking"]
+
+
+def rent_table(sources: list, months: int = 12, min_deals: int = 2, chunksize: int = 250_000,
+               resolve=None, today: pd.Timestamp | None = None) -> tuple[pd.DataFrame, dict]:
+    """Stream the Ejari rent-contract files (~5 GB, 10M+ contracts) once and return the aggregated
+    rent table: median annual rent per (community, building/project, type, bedrooms) over the last
+    `months`, with the number of contracts behind each. Only residential single-unit contracts in the
+    supported communities are kept, so memory stays small while the whole history streams past."""
+    today = pd.Timestamp(today or pd.Timestamp.today()).normalize()
+    cutoff = today - pd.DateOffset(months=months + 1)          # 1 month slack: DLD publishes a few days behind
+    kept, scanned, bytes_read = [], 0, [0]
+    for src in sources:
+        url = resolve(src) if resolve else src
+        for chunk in _chunks(url, chunksize, bytes_read):
+            scanned += len(chunk)
+            col = pick(chunk, "date")
+            if not col:
+                raise ColumnError(f"{src}: no date column. Columns: {list(chunk.columns)}")
+            chunk = chunk[to_dt(chunk[col]) >= cutoff]
+            if len(chunk):
+                p = prepare(chunk, "rent", months=1200, name=str(src), verbose=False)
+                kept.append(p[[c for c in RENT_KEEP if c in p]])
+    if not kept:
+        return pd.DataFrame(), {"contracts_scanned": scanned, "contracts_used": 0, "mb_downloaded": round(bytes_read[0] / 1e6, 1)}
+    r = pd.concat(kept, ignore_index=True)
+    r = r[r["date"] >= r["date"].max() - pd.DateOffset(months=months)]
+    agg = aggregate(r, "rent", min_deals)
+    return agg, {"contracts_scanned": scanned, "contracts_used": len(r), "as_of": str(r["date"].max().date()),
+                 "mb_downloaded": round(bytes_read[0] / 1e6, 1)}
+
+
 def build(sales_raw: pd.DataFrame, rents_raw: pd.DataFrame | None = None, months: int = 12, min_deals: int = 2,
-          verbose: bool = True) -> tuple[pd.DataFrame, dict]:
-    """Raw DLD rows -> (homes table, community price overrides). Used by the CLI and the live refresher."""
+          verbose: bool = True, rents_agg: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
+    """Raw DLD rows -> (homes table, community price overrides). Used by the CLI and the live refresher.
+    `rents_agg` is an already-aggregated rent table (from rent_table), used by the Market Data Agent."""
     s = prepare(sales_raw, "sale", months, "sales", verbose)
     rents = None
     as_of = s["date"].max()
-    if rents_raw is not None and len(rents_raw):
+    if rents_agg is not None and len(rents_agg):
+        rents = rents_agg.assign(last=pd.to_datetime(rents_agg["last"]), purpose="rent")
+        rents = rents[rents["community"].isin({c.name for c in COMMUNITIES})]
+    elif rents_raw is not None and len(rents_raw):
         r = prepare(rents_raw, "rent", months, "rents", verbose)
         rents = aggregate(r, "rent", min_deals)
         as_of = max(as_of, r["date"].max())

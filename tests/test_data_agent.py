@@ -15,7 +15,7 @@ import pytest
 from app.config import get_settings
 from app.data import incremental
 from app.data.agent import DataTools, MarketDataAgent
-from app.data.store import RedisCache, SQLiteMarketStore, current_version
+from app.data.store import RedisCache, SQLiteMarketStore, current_version, load_homes
 
 COMMS = [("Dubai Marina", "Marsa Dubai"), ("Jumeirah Village Circle", "Al Barsha South Fourth"),
          ("Business Bay", "Business Bay"), ("Dubai Hills Estate", "Hadaeq Sheikh Mohammed Bin Rashid")]
@@ -89,6 +89,8 @@ def server(tmp_path):
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(incremental, "BLOCK", 128 << 10)       # small blocks so the test file is "big"
     monkeypatch.setattr(incremental, "PROBE", 32 << 10)
+    import app.data.agent as agent_mod
+    monkeypatch.setattr(agent_mod, "download_links", lambda **k: {})   # no network: rent refresh finds no files
     s = get_settings().model_copy(update={"min_homes": 50, "min_communities": 3, "azure_openai_endpoint": None,
                                           "dubai_pulse_api_key": None})
     store = SQLiteMarketStore(tmp_path / "market.db")           # stands in for Cosmos DB
@@ -260,3 +262,79 @@ def test_download_links_parses_data_dubai_api(monkeypatch):
     monkeypatch.setattr(agent_mod.httpx, "get", lambda *a, **k: NS(raise_for_status=lambda: None, json=lambda: payload))
     assert agent_mod.download_links() == {"transactions_x_0001.csv.gz": "https://cdn/x1.csv.gz?X-Amz-Signature=1",
                                           "transactions_x_0002.csv.gz": "https://cdn/x2.csv.gz?X-Amz-Signature=3"}
+
+
+
+# ------------------------------------------------------------------------------------------ rents
+def ejari(n=6000, seed=3):
+    """Ejari-shaped rent contracts: residential flats/villas in 4 communities, plus rows that must be
+    excluded - commercial units, bulk leases (many units in one contract) and contracts older than 12 months."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for i in range(n):
+        master, area = COMMS[i % 4]
+        beds = int(rng.integers(0, 4))
+        ago = int(rng.integers(-40, 540))                     # up to 18 months back, some starting in the future
+        kind = "commercial" if i % 17 == 0 else ("bulk" if i % 23 == 0 else "home")
+        rows.append({"contract_id": f"C{i}", "contract_start_date": (date.today() - timedelta(days=ago)).strftime("%d-%m-%Y"),
+                     "annual_amount": round((40_000 + 30_000 * beds) * float(rng.uniform(.9, 1.1))),
+                     "contract_amount": 0, "no_of_prop": 12 if kind == "bulk" else 1,
+                     "ejari_property_type_en": "Office" if kind == "commercial" else "Flat",
+                     "ejari_property_sub_type_en": "Studio" if beds == 0 else f"{beds}bed rooms+hall",
+                     "property_usage_en": "Commercial" if kind == "commercial" else "Residential",
+                     "project_name_en": f"{master} P{i % 6}", "master_project_en": master, "area_name_en": area,
+                     "actual_area": [40, 75, 115, 165][beds], "nearest_metro_en": "Metro X"})
+    return pd.DataFrame(rows)
+
+
+def test_weekly_rent_refresh_streams_ejari_and_rebuilds_rent_homes(server, env, monkeypatch):
+    import gzip
+    import app.data.agent as agent_mod
+    root, base = server
+    s, store, cache = env
+    s = s.model_copy(update={"min_rent_rows": 5})
+    hist = history()
+    hist.to_csv(root / "tx.csv", index=False)
+    rents = ejari()
+    for i, part in enumerate([rents.iloc[:3000], rents.iloc[3000:]], 1):
+        with gzip.open(root / f"rent_contracts_0{i}.csv.gz", "wt") as f:
+            part.to_csv(f, index=False)
+    calls = []
+
+    def links(dataset_id=agent_mod.DATASET_ID, **k):
+        calls.append(dataset_id)
+        assert dataset_id == agent_mod.RENT_DATASET_ID
+        return {f"rent_contracts_0{i}.csv.gz": f"{base}/rent_contracts_0{i}.csv.gz" for i in (1, 2)}
+    monkeypatch.setattr(agent_mod, "download_links", links)
+
+    first = MarketDataAgent(s, DataTools(s, store, cache, [f"{base}/tx.csv"])).run()
+    assert first["outcome"] == "APPENDED" and first["rents"]["saved"]
+    meta = store.get_memory("rent_meta")
+    used = meta["contracts_used"]
+    cutoff = pd.Timestamp(date.today()) - pd.DateOffset(months=12)
+    start = pd.to_datetime(rents.contract_start_date, dayfirst=True)
+    ok = rents[(rents.property_usage_en == "Residential") & (rents.no_of_prop == 1) & (start >= cutoff)]
+    assert abs(used - len(ok)) <= len(ok) * 0.02               # commercial, bulk and old contracts excluded
+    assert meta["as_of"] <= date.today().isoformat()           # future-dated contracts don't move the window
+    homes = load_homes(store, cache)[0]
+    rent_homes = homes[homes.purpose == "rent"]
+    assert len(rent_homes) >= 20 and rent_homes["annual_rent_aed"].between(30_000, 150_000).all()
+    assert (homes.purpose == "sale").any()
+    assert len(calls) >= 3                                     # list + a fresh signed link before each file
+
+    # next day: rents are fresh -> not re-downloaded; no new sales -> nothing republished
+    calls.clear()
+    second = MarketDataAgent(s, DataTools(s, store, cache, [f"{base}/tx.csv"])).run()
+    assert second["outcome"] == "NO NEW DATA" and not calls
+
+
+def test_thin_rent_table_is_not_saved(server, env, monkeypatch):
+    import gzip
+    import app.data.agent as agent_mod
+    root, base = server
+    s, store, cache = env
+    with gzip.open(root / "r.csv.gz", "wt") as f:
+        ejari(n=40).to_csv(f, index=False)
+    monkeypatch.setattr(agent_mod, "download_links", lambda **k: {"r.csv.gz": f"{base}/r.csv.gz"})
+    out = DataTools(s, store, cache).refresh_rents()
+    assert not out["saved"] and "too thin" in out["error"] and store.get_memory("rent_table") is None

@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     min_communities: int = 12              # validation: of the 21 supported communities
     max_price_drift: float = 0.25          # validation: max day-on-day change in community AED/sq ft
     max_new_deals_per_run: int = 30_000    # validation: a normal day is a few hundred to a few thousand
+    dld_rent_file_urls: str | None = None  # comma-separated Ejari rent CSVs; empty = data.dubai download API
+    rent_refresh_days: int = 7             # rents are a rolling 12-month aggregate over ~5 GB: refresh weekly
+    min_rent_rows: int = 200               # validation: minimum rent homes (building x type x bedrooms)
+    rent_max_minutes: float = 40           # stop a slow rent scan cleanly before the job's 60-min timeout
     refetch_overlap_days: int = 7          # re-read the last week: DLD publishes ~4 days behind and registers some deals late
     # Where the rolling deal store + published homes live (Azure Blob). Empty = local folder.
 

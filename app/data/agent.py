@@ -34,21 +34,23 @@ import httpx
 import pandas as pd
 
 from app.config import Settings
-from app.data.dld import BROWSER_UA, build
+from app.data.dld import BROWSER_UA, build, rent_table
 from app.data.store import get_cache, get_market_store, normalise_batch, publish_homes
 
 log = logging.getLogger(__name__)
 WINDOW_MONTHS = 12
 DATASET_ID = 470061                     # "Real Estate Transactions" (Dubai Land Department) on data.dubai
-DOWNLOAD_API = ("https://data.dubai/o/dda/data-services/dataset-download"
-                f"?datasetId={DATASET_ID}&page=1&pageSize=30&sortDir=desc")
+RENT_DATASET_ID = 468586                # "Rent Contracts" (Ejari, Dubai Land Department) on data.dubai
+DOWNLOAD_API_T = ("https://data.dubai/o/dda/data-services/dataset-download"
+                  "?datasetId={}&page=1&pageSize=30&sortDir=desc")
+DOWNLOAD_API = DOWNLOAD_API_T.format(DATASET_ID)
 DATASET_PAGES = ["https://data.dubai/en/l/470061", "https://data.dubai/e/dataset-details-embed/35681/470061"]
 FILE_RE = re.compile(r"""https?://[^"'\s<>]+?transactions_(\d{4}-\d{2}-\d{2})_[\d-]+_(\d{4})\.csv[^"'\s<>]*""")
 
 
-def download_links(timeout: float = 30) -> dict[str, str]:
+def download_links(timeout: float = 30, dataset_id: int = DATASET_ID) -> dict[str, str]:
     """{file name: fresh signed CSV link} from data.dubai's public download API (no login)."""
-    r = httpx.get(DOWNLOAD_API, headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
+    r = httpx.get(DOWNLOAD_API_T.format(dataset_id), headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
                   timeout=timeout, follow_redirects=True)
     r.raise_for_status()
     out = {}
@@ -63,15 +65,18 @@ Each day you append the new Dubai Land Department deals to the database and refr
 
 1. recall_memory - learn the watermark, typical daily volume and notes from earlier runs.
 2. fetch_new_deals - it only fetches deals since the watermark.
-3. If it returned an "error": call remember with the error, then stop and report "NOT APPENDED" and the error.
-   If it returned 0 rows and no error: stop and report "NO NEW DATA" with the watermark date.
+3. If it returned an "error": call remember with the error; skip to step 6 (rents) and report "NOT APPENDED" for sales.
+   If it returned 0 rows and no error: there are no new sales; skip to step 6 (rents).
 4. validate_batch - read every check.
-5. Only if it passed: append_deals. If append_deals reports 0 new deals, stop: "NO NEW DATA".
-   Otherwise call rebuild_homes.
-6. If something is worth knowing next time (e.g. an unusual volume, a failed check, an area
+5. Only if it passed: append_deals.
+6. Rents: if recall_memory shows rents.stale = true, call refresh_rents (slow: it streams ~5 GB of Ejari
+   contracts; rents are refreshed weekly, not daily). Do this even when there were no new sales.
+7. Call rebuild_homes if append_deals added new deals OR refresh_rents saved a new rent table.
+   If neither happened, the result is "NO NEW DATA".
+8. If something is worth knowing next time (e.g. an unusual volume, a failed check, an area
    with many unmatched deals), call remember with one short sentence.
-7. Call market_brief, then finish with a report for the engineer:
-   first line APPENDED / NOT APPENDED / NO NEW DATA and the newest deal date. Use NO NEW DATA only when
+9. Call market_brief, then finish with a report for the engineer:
+   first line APPENDED / REFRESHED (rents only) / NOT APPENDED / NO NEW DATA and the newest deal date. Use NO NEW DATA only when
    the fetch succeeded with 0 rows or append_deals reported 0 new deals; any error means NOT APPENDED; then how many new
    deals and MB downloaded; then 3-5 bullets, each "label: value" (e.g. "Deals in store: 233,911"),
    using only numbers from the tools. Never invent numbers or print a bare number without its label."""
@@ -95,6 +100,7 @@ class DataTools:
         self.batch: Batch | None = None
         self.append_result: dict | None = None
         self.rebuild_result: dict | None = None
+        self.rent_result: dict | None = None
         snap = self.store.get_memory("homes_snapshot")
         self.prev_meta = snap["meta"] if snap else None            # what's live before this run
 
@@ -106,7 +112,68 @@ class DataTools:
         return {"watermark": self.store.get_memory("watermark"), "store": self.store.stats(),
                 "typical_new_deals_per_run": int(pd.Series(vols).median()) if vols else None,
                 "recent_runs": [{k: r.get(k) for k in ("at", "outcome", "new_deals", "watermark")} for r in runs[-5:]],
+                "rents": self._rent_status(),
                 "notes": self.store.get_memory("notes", [])[-10:]}
+
+    def _rent_status(self) -> dict:
+        meta = self.store.get_memory("rent_meta")
+        if not meta:
+            return {"stale": True, "reason": "no rent data yet (first refresh seeds 12 months of Ejari contracts)"}
+        at = pd.Timestamp(meta["refreshed_at"])
+        at = at.tz_convert(None) if at.tzinfo else at
+        age = (pd.Timestamp.now("UTC").tz_convert(None) - at).days
+        return {"stale": age >= self.s.rent_refresh_days, "age_days": age, "refresh_every_days": self.s.rent_refresh_days,
+                **{k: meta.get(k) for k in ("as_of", "rent_rows", "communities", "contracts_used")}}
+
+    def refresh_rents(self, force: bool = False) -> dict:
+        out = self._refresh_rents(force)
+        self.rent_result = out
+        return out
+
+    def _refresh_rents(self, force: bool = False) -> dict:
+        """Weekly: stream all Ejari rent-contract files once, keep the last 12 months of residential
+        single-unit contracts in the supported communities, and save the aggregated rent table."""
+        status = self._rent_status()
+        if not status["stale"] and not force:
+            return {"saved": False, "reason": f"rents are {status['age_days']} days old; refreshed every "
+                                              f"{self.s.rent_refresh_days} days", **status}
+        t0 = time.time()
+        urls = [u for u in (self.s.dld_rent_file_urls or "").split(",") if u.strip()]
+        if urls:
+            sources, resolve, src = urls, None, "DLD_RENT_FILE_URLS"
+        else:
+            try:
+                links = download_links(dataset_id=RENT_DATASET_ID)
+            except Exception as e:
+                return {"saved": False, "error": f"could not list rent files on data.dubai: {e}"[:300]}
+            if not links:
+                return {"saved": False, "error": "data.dubai listed no rent-contract CSV files"}
+            sources, src = sorted(links), f"data.dubai rent contracts ({len(links)} files)"
+            resolve = lambda name: download_links(dataset_id=RENT_DATASET_ID)[name]   # links expire in 10 min
+        try:
+            agg, info = rent_table(sources, months=WINDOW_MONTHS, resolve=resolve,
+                                   max_seconds=self.s.rent_max_minutes * 60)
+        except Exception as e:
+            return {"saved": False, "error": f"rent scan failed: {type(e).__name__}: {e}"[:300]}
+        n_comm = int(agg["community"].nunique()) if len(agg) else 0
+        # guardrails, enforced in code: never replace a good rent table with a thin or broken one
+        if len(agg) < self.s.min_rent_rows or n_comm < self.s.min_communities:
+            return {"saved": False, "error": f"rent table too thin: {len(agg)} rows in {n_comm} communities "
+                                             f"(need {self.s.min_rent_rows} / {self.s.min_communities})", **info}
+        med = agg.groupby("rooms")["value"].median()
+        if not (15_000 <= float(med.median()) <= 1_000_000):
+            return {"saved": False, "error": f"implausible median annual rent AED {med.median():,.0f}", **info}
+        rows = agg.assign(last=agg["last"].astype(str)).to_dict("records")
+        self.store.set_memory("rent_table", rows)
+        meta = {"refreshed_at": pd.Timestamp.now("UTC").isoformat(), "rent_rows": len(agg), "communities": n_comm,
+                "source": src, **info}
+        self.store.set_memory("rent_meta", meta)
+        return {"saved": True, **meta, "seconds": round(time.time() - t0, 1),
+                "median_annual_rent_by_bedrooms": {int(k): int(round(v, -3)) for k, v in med.items()}}
+
+    def _rents_df(self) -> pd.DataFrame | None:
+        rows = self.store.get_memory("rent_table")
+        return pd.DataFrame(rows) if rows else None
 
     def fetch_new_deals(self) -> dict:
         from app.data.incremental import fetch_since_files
@@ -188,15 +255,19 @@ class DataTools:
         return {**self.append_result, "store": self.store.stats()}
 
     def rebuild_homes(self) -> dict:
-        if not self.append_result:                                        # hard guard
-            return {"rebuilt": False, "reason": "append_deals has not run in this session"}
-        wm = pd.Timestamp(self.append_result["watermark"])
+        new_sales = bool(self.append_result and self.append_result.get("new"))
+        new_rents = bool(self.rent_result and self.rent_result.get("saved"))
+        if not (new_sales or new_rents):                                  # hard guard
+            return {"rebuilt": False, "reason": "nothing new: no deals appended and no rent refresh in this session"}
+        wm = pd.Timestamp((self.append_result or {}).get("watermark") or self.store.get_memory("watermark"))
         raw = self.store.load_transactions((wm - pd.DateOffset(months=WINDOW_MONTHS)).date().isoformat())
-        homes, meta = build(raw, None, months=WINDOW_MONTHS, verbose=False)
+        homes, meta = build(raw, None, months=WINDOW_MONTHS, verbose=False, rents_agg=self._rents_df())
         if len(homes) < self.s.min_homes or homes["community"].nunique() < self.s.min_communities:
             return {"rebuilt": False, "reason": f"only {len(homes)} homes in {homes['community'].nunique()} communities"}
         version = publish_homes(self.store, self.cache, homes, meta)
         self.rebuild_result = {"rebuilt": True, "version": version, "homes": len(homes), "deals_used": len(raw),
+                               "sale_homes": int((homes["purpose"] == "sale").sum()),
+                               "rent_homes": int((homes["purpose"] == "rent").sum()),
                                "data_as_of": meta.get("as_of"), "communities": int(homes["community"].nunique()),
                                "meta": meta}
         return {k: v for k, v in self.rebuild_result.items() if k != "meta"}
@@ -264,6 +335,7 @@ class DataTools:
         fn = {"recall_memory": self.recall_memory, "fetch_new_deals": self.fetch_new_deals,
               "validate_batch": self.validate_batch, "append_deals": self.append_deals,
               "rebuild_homes": self.rebuild_homes, "remember": self.remember,
+              "refresh_rents": self.refresh_rents,
               "market_brief": self.market_brief}.get(name)
         if fn is None:
             return {"error": f"unknown tool {name}"}
@@ -286,7 +358,9 @@ TOOL_SPECS = [
     _spec("fetch_new_deals", "Fetch only the DLD deals since the watermark (small overlap for late registrations)."),
     _spec("validate_batch", "Data-quality checks on the fetched batch."),
     _spec("append_deals", "Upsert the validated batch into Cosmos DB and advance the watermark."),
-    _spec("rebuild_homes", "Recompute homes from the rolling 12 months stored and publish them (Cosmos + Redis)."),
+    _spec("refresh_rents", "Weekly: stream the Ejari rent-contract files (~5 GB) and save the 12-month rent table. "
+                           "Skips itself if rents are fresh unless force=true.", {"force": {"type": "boolean"}}),
+    _spec("rebuild_homes", "Recompute sale + rent homes from the stored deals and rent table and publish them (Cosmos + Redis)."),
     _spec("remember", "Save one short note for future runs.", {"note": {"type": "string"}}, ["note"]),
     _spec("market_brief", "Numbers for the daily report."),
 ]
@@ -325,10 +399,14 @@ class MarketDataAgent:
             report = self._offline_run()
         t = self.tools
         app, reb = t.append_result or {}, t.rebuild_result or {}
-        outcome = "APPENDED" if reb.get("rebuilt") else ("NO NEW DATA" if (t.batch and not t.batch.docs) or
-                                                         (app and not app.get("new")) else "NOT APPENDED")
+        if reb.get("rebuilt"):
+            outcome = "APPENDED" if app.get("new") else "REFRESHED"          # REFRESHED = rents only
+        else:
+            outcome = "NO NEW DATA" if (t.batch and not t.batch.docs) or (app and not app.get("new")) else "NOT APPENDED"
         run = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "mode": mode, "outcome": outcome,
                "new_deals": app.get("new", 0), "watermark": t.store.get_memory("watermark"),
+               "rents": {k: t.rent_result.get(k) for k in ("saved", "rent_rows", "as_of", "error", "reason")}
+               if t.rent_result else None,
                "version": reb.get("version"), "fetch": t.batch.info if t.batch else None,
                "seconds": round(time.time() - t0, 1), "report": report[:2000]}
         runs = t.store.get_memory("runs", [])
@@ -360,31 +438,52 @@ class MarketDataAgent:
         return "Stopped after too many steps."
 
     def _offline_run(self) -> str:
+        """The same plan without an LLM: sales append, weekly rents, rebuild, report."""
         mem = self._call("recall_memory", {})
         got = self._call("fetch_new_deals", {})
+        lines, app, sales_note = [], {}, None
         if got.get("error"):
-            return f"NOT APPENDED - {got['error']}"
-        if not got.get("rows"):
-            return f"NO NEW DATA - newest deal stored {mem.get('watermark')}"
-        val = self._call("validate_batch", {})
-        if not val.get("passed"):
-            failed = "; ".join(c["detail"] for c in val["checks"] if not c["ok"] and c["blocking"])
-            self._call("remember", {"note": f"Batch rejected: {failed}"[:300]})
-            return f"NOT APPENDED - failed checks: {failed}"
-        app = self._call("append_deals", {})
-        if app.get("error") or not app.get("appended"):
-            return (f"NOT APPENDED - writing to the database failed: {app.get('error') or app.get('reason')}. "
-                    "Safe to re-run: deals already written are skipped.")
-        if not app.get("new"):
-            return f"NO NEW DATA - {got['rows']:,} recent deals re-read, all already stored (newest {app.get('watermark')})"
-        reb = self._call("rebuild_homes", {})
+            sales_note = f"NOT APPENDED - {got['error']}"
+        elif not got.get("rows"):
+            sales_note = f"NO NEW DATA - newest deal stored {mem.get('watermark')}"
+        else:
+            val = self._call("validate_batch", {})
+            if not val.get("passed"):
+                failed = "; ".join(c["detail"] for c in val["checks"] if not c["ok"] and c["blocking"])
+                self._call("remember", {"note": f"Batch rejected: {failed}"[:300]})
+                sales_note = f"NOT APPENDED - failed checks: {failed}"
+            else:
+                app = self._call("append_deals", {})
+                if app.get("error") or not app.get("appended"):
+                    sales_note = (f"NOT APPENDED - writing to the database failed: {app.get('error') or app.get('reason')}. "
+                                  "Safe to re-run: deals already written are skipped.")
+                elif not app.get("new"):
+                    sales_note = (f"NO NEW DATA - {got['rows']:,} recent deals re-read, all already stored "
+                                  f"(newest {app.get('watermark')})")
+        rents = self._call("refresh_rents", {}) if (mem.get("rents") or {}).get("stale") else None
+        rents_saved = bool(rents and rents.get("saved"))
+        reb = self._call("rebuild_homes", {}) if (app.get("new") or rents_saved) else {}
+        if rents is not None:
+            rent_line = (f"- Rents refreshed: {rents['rent_rows']:,} rent homes from {rents['contracts_used']:,} Ejari "
+                         f"contracts to {rents.get('as_of')} ({rents.get('mb_streamed')} MB CSV streamed in {rents.get('seconds')} s)") if rents_saved \
+                else f"- Rents not refreshed: {rents.get('error') or rents.get('reason')}"
+        else:
+            rent_line = f"- Rents fresh ({(mem.get('rents') or {}).get('age_days')} days old)"
+        if sales_note and not reb.get("rebuilt"):
+            return sales_note + "\n" + rent_line
         brief = self._call("market_brief", {})
-        mb = got.get("mb_downloaded")
-        lines = [f"{'APPENDED' if reb.get('rebuilt') else 'NOT APPENDED'} - newest deal {app.get('watermark')}",
-                 f"- {app['new']:,} new deals appended ({app['already_stored']:,} re-sent deals ignored)"
-                 + (f"; {mb} MB downloaded ({got['method']})" if mb is not None else f"; {got['method']}"),
-                 f"- Cosmos now holds {app['store']['transactions']:,} deals ({app['store']['from']} to {app['store']['to']})",
-                 f"- Homes: {reb.get('homes', 0):,} " + (f"published as {reb['version']}" if reb.get("rebuilt") else f"not rebuilt: {reb.get('reason')}")]
+        head = "APPENDED" if app.get("new") and reb.get("rebuilt") else ("REFRESHED" if reb.get("rebuilt") else "NOT APPENDED")
+        lines = [f"{head} - newest deal {self.tools.store.get_memory('watermark')}"]
+        if app.get("new"):
+            mb = got.get("mb_downloaded")
+            lines += [f"- {app['new']:,} new deals appended ({app['already_stored']:,} re-sent deals ignored)"
+                      + (f"; {mb} MB downloaded ({got['method']})" if mb is not None else f"; {got['method']}"),
+                      f"- Cosmos now holds {app['store']['transactions']:,} deals ({app['store']['from']} to {app['store']['to']})"]
+        elif sales_note:
+            lines.append(f"- Sales: {sales_note}")
+        lines.append(rent_line)
+        lines.append(f"- Homes: {reb.get('homes', 0):,} ({reb.get('sale_homes', 0):,} for sale, {reb.get('rent_homes', 0):,} to rent) "
+                     + (f"published as {reb['version']}" if reb.get("rebuilt") else f"not rebuilt: {reb.get('reason')}"))
         if brief.get("new_deals_by_community"):
             lines.append("- Busiest in this batch: " + ", ".join(list(brief["new_deals_by_community"])[:3]))
         if brief.get("price_psf_change_since_last_publish"):
