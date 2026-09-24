@@ -131,6 +131,12 @@ Old deals expire by themselves (per-item TTL), re-sent deals just overwrite (ide
 hot-swaps new homes within minutes: no rebuild, no redeploy. Deploy with `bash infra/deploy_data_agent.sh`
 (add `ENABLE_REDIS=1` for Redis). Run locally with `python -m scripts.data_agent --files data/raw/*.csv`.
 
+**Runs on Microsoft Foundry Agent Service.** With `FOUNDRY_PROJECT_ENDPOINT` set (`bash infra/deploy_foundry.sh`),
+the Market Data Agent is a versioned **Foundry agent** (`baytak-market-data-agent`: gpt-5-mini, instructions,
+7 function tools). Each daily run is a Foundry conversation you can open in the portal. The tools are
+client-executed: Foundry decides which tool to call, the job runs it against Cosmos/Redis/DLD and returns
+the result (`app/data/foundry_agent.py`). A new agent version is created only when the prompt or tools change.
+
 ### Live: Dubai Pulse API (refreshes itself daily)
 
 1. Register at [dubaipulse.gov.ae](https://www.dubaipulse.gov.ae) and request access to
@@ -177,5 +183,31 @@ The loader prints which DLD areas it couldn't map to the 21 supported communitie
 | GET | `/metrics/offline` · `/metrics/ab` · `/metrics/bandit` | Offline eval, live Bayesian A/B, bandit posteriors |
 | GET | `/health` · `/docs` | Which backends are active; OpenAPI UI |
 
+## 4-week plan (starting 23 Sep 2026)
+
+**Week 1: run and understand it.** Run locally, read every file, and break things on purpose. Push to GitHub with CI green.
+Record a 2-minute Loom of the UI and the agent trace.
+
+**Week 2: go live on Azure.** Deploy with `infra/deploy.sh`, switch on Azure OpenAI, Cosmos and App Insights. Put the live URL
+in your resume and LinkedIn. Build an App Insights workbook: p95 latency, tool-call mix, % grounded.
+
+**Week 3: real data and evaluation.** Load DLD transactions. Write 30 test prompts (EN + AR) with expected
+`UserQuery` fields and measure LLM extraction accuracy against the rule-based parser. Add an LLM-as-judge
+faithfulness score for the answers.
+
+**Week 4: depth for interviews** (pick 2):
+- Azure Maps Route API for real commute times
+- Azure AI Search + `text-embedding-3-small` hybrid retrieval, with recall@200 compared to local
+- CUPED variance reduction in `ab_summary` (use pre-period CTR as the covariate)
+- Multi-agent split with Semantic Kernel / Azure AI Foundry Agent Service (planner + finance agent + critic)
+- Rent-vs-buy calculator tool; RERA rental-increase calculator for tenants
+
+## Interview talking points
+
+- *Why two stages?* Retrieval is cheap and recall-oriented; the ranker is expensive and precision-oriented. The LLM never ranks, it orchestrates.
+- *How do you stop hallucinated listings?* Tools own the facts; a grounding check rejects IDs that no tool returned (there's a test for it).
+- *Cold start?* New listings get a reserved exploration slot chosen by Thompson sampling, so they collect feedback without hurting the page much.
+- *How would you ship the ranker?* Sticky 80/20 split, Bayesian read-out, ship when P(better) > 95% with a lift CI above 0.
+- *UAE specifics:* annual rents, 4% DLD fee, LTV tiers by residency/price/off-plan, 50% DBR cap, AED 2M Golden Visa threshold, Arabic queries, UAE North hosting for data residency.
 
 *Finance and visa figures are simplified estimates. Verify against current UAE Central Bank, DLD and GDRFA rules.*

@@ -22,10 +22,18 @@ def main() -> None:
     a = ap.parse_args()
     s = get_settings()
     setup(s)
-    result = MarketDataAgent(s, DataTools(s, file_urls=a.files)).run()
+    tools = DataTools(s, file_urls=a.files)
+    if s.foundry_project_endpoint:                  # the agent lives in Microsoft Foundry
+        from app.data.foundry_agent import FoundryMarketDataAgent
+        result = FoundryMarketDataAgent(s, tools).run()
+    else:                                           # plain Azure OpenAI function calling
+        result = MarketDataAgent(s, tools).run()
     print(result["report"])
     print(f"\noutcome={result['outcome']} mode={result['mode']} watermark={result['watermark']} "
           f"new_deals={result['new_deals']} seconds={result['seconds']}")
+    if result.get("foundry"):
+        f = result["foundry"]
+        print(f"foundry agent={f['agent']} version={f['version']} conversation={f['conversation_id']}")
     for t in result["trace"]:
         print(f"  {t['tool']:<16} {t['seconds']:>6}s  {t['result'][:150]}")
     sys.exit(0 if result["outcome"] in ("APPENDED", "NO NEW DATA") else 1)

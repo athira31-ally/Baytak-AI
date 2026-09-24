@@ -262,10 +262,14 @@ TOOL_SPECS = [
 
 
 class MarketDataAgent:
+    mode_name = "azure-openai"
+
     def __init__(self, settings: Settings, tools: DataTools | None = None, client=None):
         self.s = settings
         self.tools = tools or DataTools(settings)
-        if client is None and settings.use_azure_openai:
+        if client is False:                       # subclass supplies its own client
+            client = None
+        elif client is None and settings.use_azure_openai:
             from app.agents.llm import azure_openai_client
             client = azure_openai_client(settings)
         self.client = client
@@ -283,7 +287,7 @@ class MarketDataAgent:
         report, mode = None, "offline"
         if self.client is not None:
             try:
-                report, mode = self._llm_run(), "azure-openai"
+                report, mode = self._llm_run(), self.mode_name
             except Exception as e:
                 log.exception("LLM agent failed; falling back to fixed pipeline: %s", e)
         if report is None:

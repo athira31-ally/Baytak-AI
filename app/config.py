@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     refetch_overlap_days: int = 7          # re-read the last week: DLD publishes ~4 days behind and registers some deals late
     # Where the rolling deal store + published homes live (Azure Blob). Empty = local folder.
 
+    # --- Microsoft Foundry Agent Service (Market Data Agent lives in Foundry when set) ---
+    foundry_project_endpoint: str | None = None   # https://<res>.services.ai.azure.com/api/projects/<project>
+    foundry_model_deployment: str = "gpt-5-mini"
+    foundry_agent_name: str = "baytak-market-data-agent"
+
     # --- Hot cache (Azure Cache for Redis). Empty = in-process cache ---
     redis_url: str | None = None            # e.g. rediss://:<key>@<name>.redis.cache.windows.net:6380/0
     homes_sync_seconds: int = 300           # how often the app checks for a new homes version
