@@ -348,32 +348,38 @@ RENT_KEEP = ["community", "building", "project", "master", "type", "rooms", "siz
 
 
 def rent_table(sources: list, months: int = 12, min_deals: int = 2, chunksize: int = 250_000,
-               resolve=None, today: pd.Timestamp | None = None) -> tuple[pd.DataFrame, dict]:
+               resolve=None, today: pd.Timestamp | None = None, max_seconds: float | None = None) -> tuple[pd.DataFrame, dict]:
     """Stream the Ejari rent-contract files (~5 GB, 10M+ contracts) once and return the aggregated
     rent table: median annual rent per (community, building/project, type, bedrooms) over the last
     `months`, with the number of contracts behind each. Only residential single-unit contracts in the
     supported communities are kept, so memory stays small while the whole history streams past."""
+    import time as _time
     today = pd.Timestamp(today or pd.Timestamp.today()).normalize()
-    cutoff = today - pd.DateOffset(months=months + 1)          # 1 month slack: DLD publishes a few days behind
-    kept, scanned, bytes_read = [], 0, [0]
+    cutoff = today - pd.DateOffset(months=months)
+    # Ejari contracts can be registered to START in the future: window on today, not on the newest date
+    horizon = today + pd.Timedelta(days=62)
+    kept, scanned, bytes_read, t0 = [], 0, [0], _time.time()
     for src in sources:
         url = resolve(src) if resolve else src
         for chunk in _chunks(url, chunksize, bytes_read):
+            if max_seconds and _time.time() - t0 > max_seconds:
+                raise TimeoutError(f"rent scan exceeded {max_seconds / 60:.0f} min after {scanned:,} contracts")
             scanned += len(chunk)
             col = pick(chunk, "date")
             if not col:
                 raise ColumnError(f"{src}: no date column. Columns: {list(chunk.columns)}")
-            chunk = chunk[to_dt(chunk[col]) >= cutoff]
+            d = to_dt(chunk[col])
+            chunk = chunk[(d >= cutoff) & (d <= horizon)]
             if len(chunk):
                 p = prepare(chunk, "rent", months=1200, name=str(src), verbose=False)
                 kept.append(p[[c for c in RENT_KEEP if c in p]])
     if not kept:
         return pd.DataFrame(), {"contracts_scanned": scanned, "contracts_used": 0, "mb_downloaded": round(bytes_read[0] / 1e6, 1)}
     r = pd.concat(kept, ignore_index=True)
-    r = r[r["date"] >= r["date"].max() - pd.DateOffset(months=months)]
+    r = r.assign(date=r["date"].clip(upper=today))             # future starts count as "current"
     agg = aggregate(r, "rent", min_deals)
     return agg, {"contracts_scanned": scanned, "contracts_used": len(r), "as_of": str(r["date"].max().date()),
-                 "mb_downloaded": round(bytes_read[0] / 1e6, 1)}
+                 "mb_streamed": round(bytes_read[0] / 1e6, 1), "seconds": round(_time.time() - t0, 1)}
 
 
 def build(sales_raw: pd.DataFrame, rents_raw: pd.DataFrame | None = None, months: int = 12, min_deals: int = 2,
