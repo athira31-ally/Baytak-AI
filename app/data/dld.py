@@ -277,14 +277,23 @@ class _IterStream(io.RawIOBase):
         return n
 
 
-def _chunks(source, chunksize: int):
+def _chunks(source, chunksize: int, counter: list | None = None):
     usecols = lambda c: _snake(c) in WANTED          # only the ~15 columns we use
     if isinstance(source, str) and source.startswith("http"):
+        import gzip
         import httpx
+
+        def counted(it):
+            for b in it:
+                if counter is not None:
+                    counter[0] += len(b)
+                yield b
         with httpx.stream("GET", source, timeout=httpx.Timeout(60, read=300), follow_redirects=True,
                           headers={"User-Agent": BROWSER_UA}) as r:
             r.raise_for_status()
-            stream = io.BufferedReader(_IterStream(r.iter_bytes(1 << 20)), buffer_size=1 << 20)
+            stream = io.BufferedReader(_IterStream(counted(r.iter_bytes(1 << 20))), buffer_size=1 << 20)
+            if stream.peek(2)[:2] == b"\x1f\x8b":   # data.dubai serves *.csv.gz; unzip on the fly if needed
+                stream = io.BufferedReader(gzip.GzipFile(fileobj=stream), buffer_size=1 << 20)
             yield from pd.read_csv(stream, usecols=usecols, chunksize=chunksize, low_memory=False)
     else:
         yield from pd.read_csv(source, usecols=usecols, chunksize=chunksize, low_memory=False)

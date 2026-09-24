@@ -210,3 +210,53 @@ def test_app_hot_swaps_published_homes(server, env, client):
         assert not w.check_once()                                # same version: no reload
     finally:
         rec.swap_listings(before)
+
+
+class SignedHandler(RangeHandler):
+    """Like data.dubai's CDN: pre-signed GET links (HEAD is refused), query string ignored."""
+    def do_HEAD(self):
+        self.send_error(403)
+
+    def translate_path(self, path):
+        return super().translate_path(path.split("?", 1)[0])
+
+
+def test_fetch_uses_fresh_signed_links_and_unzips(tmp_path, monkeypatch):
+    import gzip
+    df = history(n=3000, seed=5)
+    for i, part in enumerate([df.iloc[:1500], df.iloc[1500:]], 1):
+        with gzip.open(tmp_path / f"transactions_2026-09-23_0{i}.csv.gz", "wt") as f:
+            part.to_csv(f, index=False)
+    handler = lambda *a, **k: SignedHandler(*a, directory=str(tmp_path), **k)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    calls = []
+
+    def resolve(name):                        # a new signed link per file, like download_links()
+        calls.append(name)
+        return f"{base}/{name}.gz?X-Amz-Expires=600&X-Amz-Signature=abc{len(calls)}"
+
+    since = pd.Timestamp(date.today() - timedelta(days=30))
+    try:
+        got, stats = incremental.fetch_since_files(
+            ["transactions_2026-09-23_01.csv", "transactions_2026-09-23_02.csv"], since, resolve=resolve)
+    finally:
+        srv.shutdown()
+    want = df[pd.to_datetime(df["instance_date"]) >= since]
+    assert calls == ["transactions_2026-09-23_01.csv", "transactions_2026-09-23_02.csv"]
+    assert sorted(got["transaction_id"]) == sorted(want["transaction_id"])
+    assert stats.mode.startswith("full scan (signed") and stats.bytes_read > 0
+
+
+def test_download_links_parses_data_dubai_api(monkeypatch):
+    from app.data import agent as agent_mod
+    payload = {"success": True, "data": {"metadata": [
+        {"file_folder": "transactions_x_0001", "files": [
+            {"file_url": "https://cdn/x1.csv.gz?X-Amz-Signature=1", "file_name": "transactions_x_0001.csv.gz", "file_extension": "csv"},
+            {"file_url": "https://cdn/x1.json.gz?X-Amz-Signature=2", "file_name": "transactions_x_0001.json.gz", "file_extension": "json"}]},
+        {"file_folder": "transactions_x_0002", "files": [
+            {"file_url": "https://cdn/x2.csv.gz?X-Amz-Signature=3", "file_name": "transactions_x_0002.csv.gz", "file_extension": "csv"}]}]}}
+    monkeypatch.setattr(agent_mod.httpx, "get", lambda *a, **k: NS(raise_for_status=lambda: None, json=lambda: payload))
+    assert agent_mod.download_links() == {"transactions_x_0001.csv.gz": "https://cdn/x1.csv.gz?X-Amz-Signature=1",
+                                          "transactions_x_0002.csv.gz": "https://cdn/x2.csv.gz?X-Amz-Signature=3"}

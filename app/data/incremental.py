@@ -18,6 +18,8 @@ import csv
 import io
 import logging
 from dataclasses import dataclass
+from typing import Callable
+from urllib.parse import urlparse
 
 import httpx
 import pandas as pd
@@ -93,14 +95,31 @@ def _head_since(f: RangeFile, header: list[str], header_len: int, date_col: str,
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=header)
 
 
-def fetch_since_files(urls: list[str], since: pd.Timestamp) -> tuple[pd.DataFrame, FetchStats]:
+def _signed_or_gzip(url: str) -> bool:
+    """Pre-signed S3 links (data.dubai) reject HEAD, and gzip can't be range-read by line."""
+    return "X-Amz-Signature=" in url or urlparse(url).path.endswith(".gz")
+
+
+def fetch_since_files(urls: list[str], since: pd.Timestamp,
+                      resolve: Callable[[str], str] | None = None) -> tuple[pd.DataFrame, FetchStats]:
+    """`resolve` turns a file name into a fresh download link just before it is read
+    (data.dubai links expire after 10 minutes)."""
     stats = FetchStats()
     out = []
     with httpx.Client(timeout=httpx.Timeout(60, read=300), headers={"User-Agent": BROWSER_UA}) as http:
         for url in urls:
+            if resolve is not None:
+                url = resolve(url)
             if not url.startswith("http"):                      # local file: stream it once
                 out.append(_stream_since(url, since))
                 stats.mode = "full scan (local file)"
+                continue
+            if _signed_or_gzip(url):
+                counter = [0]
+                out.append(_stream_since(url, since, counter))
+                stats.mode = "full scan (signed data.dubai link)"
+                stats.bytes_read += counter[0]
+                stats.requests += 1
                 continue
             f = RangeFile(url, http, stats)
             if not f.ranges:
@@ -145,9 +164,9 @@ def _sorted(dates: pd.Series, tolerance: float = 0.05) -> bool:
     return min((diff < pd.Timedelta(0)).mean(), (diff > pd.Timedelta(0)).mean()) <= tolerance
 
 
-def _stream_since(src: str, since: pd.Timestamp) -> pd.DataFrame:
+def _stream_since(src: str, since: pd.Timestamp, counter: list | None = None) -> pd.DataFrame:
     keep, date_col = [], None
-    for chunk in _chunks(src, 250_000):
+    for chunk in _chunks(src, 250_000, counter):
         date_col = date_col or pick(chunk, "date")
         keep.append(chunk[to_dt(chunk[date_col]) >= since])
     return pd.concat(keep, ignore_index=True) if keep else pd.DataFrame()

@@ -39,15 +39,32 @@ from app.data.store import get_cache, get_market_store, normalise_batch, publish
 
 log = logging.getLogger(__name__)
 WINDOW_MONTHS = 12
+DATASET_ID = 470061                     # "Real Estate Transactions" (Dubai Land Department) on data.dubai
+DOWNLOAD_API = ("https://data.dubai/o/dda/data-services/dataset-download"
+                f"?datasetId={DATASET_ID}&page=1&pageSize=30&sortDir=desc")
 DATASET_PAGES = ["https://data.dubai/en/l/470061", "https://data.dubai/e/dataset-details-embed/35681/470061"]
 FILE_RE = re.compile(r"""https?://[^"'\s<>]+?transactions_(\d{4}-\d{2}-\d{2})_[\d-]+_(\d{4})\.csv[^"'\s<>]*""")
+
+
+def download_links(timeout: float = 30) -> dict[str, str]:
+    """{file name: fresh signed CSV link} from data.dubai's public download API (no login)."""
+    r = httpx.get(DOWNLOAD_API, headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
+                  timeout=timeout, follow_redirects=True)
+    r.raise_for_status()
+    out = {}
+    for m in (r.json().get("data") or {}).get("metadata") or []:
+        for f in m.get("files") or []:
+            if f.get("file_extension") == "csv" and f.get("file_url"):
+                out[f.get("file_name") or m.get("file_folder")] = f["file_url"]
+    return out
 
 SYSTEM_PROMPT = """You are the Market Data Agent for Baytak AI, a Dubai property recommender.
 Each day you append the new Dubai Land Department deals to the database and refresh the homes.
 
 1. recall_memory - learn the watermark, typical daily volume and notes from earlier runs.
 2. fetch_new_deals - it only fetches deals since the watermark.
-3. If it returned 0 rows: stop and report "NO NEW DATA" with the watermark date.
+3. If it returned an "error": call remember with the error, then stop and report "NOT APPENDED" and the error.
+   If it returned 0 rows and no error: stop and report "NO NEW DATA" with the watermark date.
 4. validate_batch - read every check.
 5. Only if it passed: append_deals. If append_deals reports 0 new deals, stop: "NO NEW DATA".
    Otherwise call rebuild_homes.
@@ -56,7 +73,8 @@ Each day you append the new Dubai Land Department deals to the database and refr
 7. Call market_brief, then finish with a report for the engineer:
    first line APPENDED / NOT APPENDED / NO NEW DATA and the newest deal date. Use NO NEW DATA only when
    the fetch succeeded with 0 rows or append_deals reported 0 new deals; any error means NOT APPENDED; then how many new
-   deals and MB downloaded; then 3-5 bullets using only numbers from the tools. Never invent numbers."""
+   deals and MB downloaded; then 3-5 bullets, each "label: value" (e.g. "Deals in store: 233,911"),
+   using only numbers from the tools. Never invent numbers or print a bare number without its label."""
 
 
 @dataclass
@@ -83,7 +101,8 @@ class DataTools:
     # ------------------------------------------------------------------ tools
     def recall_memory(self) -> dict:
         runs = self.store.get_memory("runs", [])
-        vols = [r["new_deals"] for r in runs if r.get("new_deals")]
+        # daily top-ups only: the one-off 12-month seed load would make "typical" look like 200k+
+        vols = [r["new_deals"] for r in runs if r.get("new_deals") and r["new_deals"] <= self.s.max_new_deals_per_run]
         return {"watermark": self.store.get_memory("watermark"), "store": self.store.stats(),
                 "typical_new_deals_per_run": int(pd.Series(vols).median()) if vols else None,
                 "recent_runs": [{k: r.get(k) for k in ("at", "outcome", "new_deals", "watermark")} for r in runs[-5:]],
@@ -106,7 +125,7 @@ class DataTools:
             found = self._find_files()
             if not found["files"]:
                 return {"rows": 0, "error": found["error"], "details": found.get("details")}
-            raw, stats = fetch_since_files(found["files"], since)
+            raw, stats = fetch_since_files(found["files"], since, resolve=found.get("resolve"))
             how = {"source": found.get("source"), "method": stats.mode,
                    "mb_downloaded": round(stats.bytes_read / 1e6, 1), "http_requests": stats.requests}
         docs = normalise_batch(raw)
@@ -210,10 +229,22 @@ class DataTools:
 
     # ---------------------------------------------------------------- helpers
     def _find_files(self) -> dict:
+        """Where today's DLD export lives. data.dubai hands out signed links that expire after
+        10 minutes, so we return file NAMES plus a resolver that asks for a fresh link right
+        before each file is downloaded (the two ~550 MB parts can take longer than 10 min)."""
         if self.file_urls:
             return {"files": self.file_urls, "source": "DLD_FILE_URLS"}
         errors = []
-        for page in DATASET_PAGES:
+        try:
+            links = download_links()
+            if links:
+                snap = sorted(links)[0].split("_")[1]
+                return {"files": sorted(links), "resolve": lambda name: download_links()[name],
+                        "source": f"data.dubai API snapshot {snap}"}
+            errors.append(f"{DOWNLOAD_API}: no CSV files listed")
+        except Exception as e:
+            errors.append(f"{DOWNLOAD_API}: {type(e).__name__}: {e}"[:300])
+        for page in DATASET_PAGES:                      # fallback: links embedded in the page HTML
             try:
                 html = httpx.get(page, headers={"User-Agent": BROWSER_UA}, timeout=30, follow_redirects=True).text
             except Exception as e:
@@ -226,7 +257,7 @@ class DataTools:
                 latest = max(found)
                 return {"files": [found[latest][k] for k in sorted(found[latest])], "source": f"data.dubai snapshot {latest}"}
             errors.append(f"{page}: no transaction CSV links found (JavaScript-rendered or blocked)")
-        return {"files": [], "error": "Could not discover data.dubai download links; set DLD_FILE_URLS "
+        return {"files": [], "error": "Could not get the DLD download links from data.dubai; set DLD_FILE_URLS "
                                       "or DUBAI_PULSE_API_KEY/SECRET.", "details": errors}
 
     def call(self, name: str, args: dict) -> dict:
