@@ -163,7 +163,8 @@ class DataTools:
         med = agg.groupby("rooms")["value"].median()
         if not (15_000 <= float(med.median()) <= 1_000_000):
             return {"saved": False, "error": f"implausible median annual rent AED {med.median():,.0f}", **info}
-        rows = agg.assign(last=agg["last"].astype(str)).to_dict("records")
+        clean = agg.assign(last=agg["last"].astype(str)).astype(object)
+        rows = clean.where(pd.notna(clean), None).to_dict("records")        # NaN -> null (strict JSON)
         self.store.set_memory("rent_table", rows)
         meta = {"refreshed_at": pd.Timestamp.now("UTC").isoformat(), "rent_rows": len(agg), "communities": n_comm,
                 "source": src, **info}

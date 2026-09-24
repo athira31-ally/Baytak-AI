@@ -116,6 +116,23 @@ class SQLiteMarketStore:
             self.db.commit()
 
 
+def _json_safe(v):
+    """Replace NaN/inf (pandas' missing values) with None, recursively, so the value is strict JSON."""
+    import math
+    if isinstance(v, float):
+        return None if math.isnan(v) or math.isinf(v) else v
+    if isinstance(v, dict):
+        return {k: _json_safe(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    if hasattr(v, "item") and not isinstance(v, (str, bytes)):     # numpy scalars
+        try:
+            return _json_safe(v.item())
+        except Exception:
+            return str(v)
+    return v
+
+
 # ----------------------------------------------------------- Cosmos (Azure)
 class CosmosMarketStore:
     """Containers: `market_tx` (partition /ym, TTL 400 days) and `agent_memory` (partition /key)."""
@@ -213,7 +230,8 @@ class CosmosMarketStore:
         return item["v"]
 
     def set_memory(self, key: str, value) -> None:
-        raw = json.dumps(value, default=str)
+        value = _json_safe(value)                # Cosmos rejects NaN / Infinity (invalid JSON)
+        raw = json.dumps(value, default=str, allow_nan=False)
         if len(raw) <= self.PART:
             self.mem.upsert_item({"id": key, "key": key, "v": value})
             return

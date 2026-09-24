@@ -11,6 +11,8 @@ class FakeContainer:
         self.items = {}
 
     def upsert_item(self, item):
+        import json
+        json.dumps(item, allow_nan=False)          # like Cosmos: NaN/Infinity is a 400 BadRequest
         self.items[item["id"]] = item
 
     def execute_item_batch(self, ops, partition_key):
@@ -71,3 +73,14 @@ def test_bulk_seed_is_batched_and_resumable():
     docs = [doc(i, i % 300) for i in range(1050)]
     assert s.upsert_transactions(docs)["new"] == 1050
     assert s.upsert_transactions(docs) == {"new": 0, "updated": 1050}    # re-run after a crash: nothing rewritten
+
+
+def test_memory_values_with_nan_are_stored_as_null():
+    import numpy as np
+    import pandas as pd
+    st = store()
+    table = pd.DataFrame({"community": ["Dubai Marina", "JVC"], "metro": ["DMCC", np.nan],
+                          "value": [90_000.0, np.nan], "deals": np.array([3, 4])})
+    st.set_memory("rent_table", table.to_dict("records"))      # raw pandas records: NaN + numpy ints
+    got = st.get_memory("rent_table")
+    assert got[1]["metro"] is None and got[1]["value"] is None and got[1]["deals"] == 4
