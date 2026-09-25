@@ -124,19 +124,6 @@ footer .row{display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px}
   <figure><img src="images/07-quality.png" alt="Evaluation results: 100% task success, groundedness and safety" loading="lazy"></figure>
 </div></section>
 
-<section><div class="wrap">
-  <div class="eyebrow">07 — Engineering decisions</div>
-  <h2>What I'd tell you in an interview</h2>
-  <div class="two">
-    <div class="box"><h3>Numbers only come from tools</h3><p>The writer sees only tool output, and a grounding check rejects any listing ID no tool returned — measured at 100% by the eval suite.</p></div>
-    <div class="box"><h3>Append for sales, aggregate for rents</h3><p>~1,000 new sales a day are appended and de-duplicated by ID; 12M rent contracts become a weekly rolling median table instead of being stored.</p></div>
-    <div class="box"><h3>Guardrails in code, not prompts</h3><p>The data agent can't publish a batch that failed validation — the tools enforce it, whatever the model decides.</p></div>
-    <div class="box"><h3>It degrades, it doesn't break</h3><p>Model down → deterministic agents. Search down → in-memory retrieval. Bad data → yesterday's homes keep serving.</p></div>
-  </div>
-  <ul class="clean">
-    <li>Honest limits: user behaviour for ranker training is simulated; commute times are estimates; homes are real price evidence, not live adverts.</li>
-  </ul>
-</div></section>
 
 <section><div class="wrap">
   <div class="eyebrow">08 — Stack</div>
