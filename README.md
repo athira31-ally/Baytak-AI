@@ -105,7 +105,7 @@ flowchart LR
 
 Regenerated on every `python -m scripts.bootstrap` → `artifacts/metrics.json`, also served at `/metrics/offline`.
 
-> **Be upfront about this in interviews:** the *homes and prices are real* (Dubai Land Department sales and
+> **What's real and what's simulated:** the *homes and prices are real* (Dubai Land Department sales and
 > Ejari rent contracts), but *user behaviour is simulated*: users with hidden preferences (commute sensitivity,
 > school weight, price sensitivity) generate the clicks the ranker learns from. The pipeline, evaluation method
 > and serving stack are real.
